@@ -339,7 +339,7 @@ def dashboard(request: Request):
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
 .header{{background:#1a73e8;color:#fff;padding:20px;text-align:center}}
-.header .logo{{width:72px;height:72px;border-radius:50%;object-fit:cover;background:#fff;padding:6px;margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
+.header .logo{{width:100px;height:100px;border-radius:50%;object-fit:cover;background:#fff;padding:6px;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
 .header h1{{font-size:24px;margin-top:4px}}
 .container{{max-width:900px;margin:20px auto;padding:0 16px}}
 .card{{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
@@ -357,7 +357,7 @@ th{{color:#666;font-weight:600}}
 .s-rescheduled{{color:#e37400}}
 .s-cancelled{{color:#c5221f;text-decoration:line-through}}
 img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
-.box .logo{{width:100px;height:100px;border-radius:50%;object-fit:cover;margin-bottom:8px}}
+
 .empty{{text-align:center;color:#999;padding:30px}}
 .ftr{{text-align:center;padding:20px;color:#999;font-size:13px}}
 .logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
@@ -399,7 +399,7 @@ button:hover{background:#1557b0}
 </head>
 <body>
 <div class="box">
-<img src="/static/logo.png" style="width:100px;height:100px;border-radius:50%;object-fit:cover;background:#f0f2f5;padding:8px;box-shadow:0 2px 8px rgba(0,0,0,.1);margin-bottom:8px"><h1>PatoAgenda AI</h1><p>Agendamentos Inteligentes</p>
+<img src="/static/logo.png" style="width:140px;height:140px;border-radius:50%;object-fit:cover;background:#f0f2f5;padding:10px;box-shadow:0 2px 12px rgba(0,0,0,.12);margin-bottom:12px"><h1>PatoAgenda AI</h1><p>Agendamentos Inteligentes</p>
 <div class="tab"><div id="tabLogin" class="active" onclick="showTab('login')">Entrar</div><div id="tabReg" onclick="showTab('register')">Cadastrar</div></div>
 <form id="loginForm" onsubmit="return submitForm('login')">
 <input type="email" id="loginEmail" placeholder="Email" required>
