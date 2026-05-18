@@ -401,13 +401,13 @@ button:hover{background:#1557b0}
 <div class="box">
 <img src="/static/logo.png" style="width:140px;height:140px;border-radius:50%;object-fit:cover;background:#f0f2f5;padding:10px;box-shadow:0 2px 12px rgba(0,0,0,.12);margin-bottom:12px"><h1>PatoAgenda AI</h1><p>Agendamentos Inteligentes</p>
 <div class="tab"><div id="tabLogin" class="active" onclick="showTab('login')">Entrar</div><div id="tabReg" onclick="showTab('register')">Cadastrar</div></div>
-<form id="loginForm" onsubmit="return submitForm('login')">
+<form id="loginForm" onsubmit="submitForm(event,'login')">
 <input type="email" id="loginEmail" placeholder="Email" required>
 <input type="password" id="loginPass" placeholder="Senha" required>
 <button type="submit">Entrar</button>
 <div class="error" id="loginError"></div>
 </form>
-<form id="registerForm" class="hidden" onsubmit="return submitForm('register')">
+<form id="registerForm" class="hidden" onsubmit="submitForm(event,'register')">
 <input type="text" id="regName" placeholder="Nome da empresa" required>
 <input type="email" id="regEmail" placeholder="Email" required>
 <input type="password" id="regPass" placeholder="Senha" required>
@@ -417,14 +417,14 @@ button:hover{background:#1557b0}
 </div>
 <script>
 function showTab(t){document.getElementById('loginForm').classList.toggle('hidden',t!='login');document.getElementById('registerForm').classList.toggle('hidden',t!='register');document.getElementById('tabLogin').classList.toggle('active',t=='login');document.getElementById('tabReg').classList.toggle('active',t=='register')}
-async function submitForm(t){
+async function submitForm(e,t){e.preventDefault();
 const form=t=='login'?{email:loginEmail.value,password:loginPass.value}:{name:regName.value,email:regEmail.value,password:regPass.value};
 try{
 const res=await fetch('/auth/'+t,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
 const data=await res.json();
-if(!res.ok){document.getElementById(t+'Error').textContent=data.detail||'Erro';document.getElementById(t+'Error').style.display='block';return false}
-localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href='/dashboard';return false
-}catch(e){document.getElementById(t+'Error').textContent='Erro de conexão com o servidor';document.getElementById(t+'Error').style.display='block';return false}}
+if(!res.ok){document.getElementById(t+'Error').textContent=data.detail||'Erro';document.getElementById(t+'Error').style.display='block';return}
+localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href='/dashboard'
+}catch(e){document.getElementById(t+'Error').textContent='Erro de conexão com o servidor';document.getElementById(t+'Error').style.display='block'}}
 if(localStorage.getItem('token')){window.location.href='/dashboard'}
 </script>
 </body>
