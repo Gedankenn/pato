@@ -15,12 +15,9 @@ class AppointmentReschedule(BaseModel):
     new_end_time: str
 
 
-class AppointmentCancel(BaseModel):
-    appointment_id: int
-
-
 class AppointmentResponse(BaseModel):
     id: int
+    barbershop_id: int
     title: str
     description: str
     start_time: str
@@ -33,15 +30,30 @@ class AppointmentResponse(BaseModel):
 class MessageRequest(BaseModel):
     message: str
     thread_id: Optional[str] = None
-
-
-class ToolCallResult(BaseModel):
-    function: str
-    arguments: dict
-    result: str
+    barbershop_id: Optional[int] = None
 
 
 class MessageResponse(BaseModel):
     reply: str
     thread_id: str
-    action: Optional[ToolCallResult] = None
+
+
+# ── Auth ────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    barbershop_id: int
+    name: str
+    email: str
+    whatsapp_number: Optional[str] = None

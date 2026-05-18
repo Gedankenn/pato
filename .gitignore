@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 .env
 *.db
+
+# WhatsApp
+whatsapp/node_modules/
+whatsapp/sessions/
+whatsapp/public/
+whatsapp/data/
+whatsapp/.wwebjs_cache/
