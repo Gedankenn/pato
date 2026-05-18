@@ -417,8 +417,14 @@ button:hover{background:#1557b0}
 </div>
 <script>
 function showTab(t){document.getElementById('loginForm').classList.toggle('hidden',t!='login');document.getElementById('registerForm').classList.toggle('hidden',t!='register');document.getElementById('tabLogin').classList.toggle('active',t=='login');document.getElementById('tabReg').classList.toggle('active',t=='register')}
-async function submitForm(t){const form=t=='login'?{email:loginEmail.value,password:loginPass.value}:{name:regName.value,email:regEmail.value,password:regPass.value};const res=await fetch('/auth/'+t,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});const data=await res.json();if(!res.ok){document.getElementById(t+'Error').textContent=data.detail||'Erro';document.getElementById(t+'Error').style.display='block';return false}
-localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href='/dashboard';return false}
+async function submitForm(t){
+const form=t=='login'?{email:loginEmail.value,password:loginPass.value}:{name:regName.value,email:regEmail.value,password:regPass.value};
+try{
+const res=await fetch('/auth/'+t,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
+const data=await res.json();
+if(!res.ok){document.getElementById(t+'Error').textContent=data.detail||'Erro';document.getElementById(t+'Error').style.display='block';return false}
+localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href='/dashboard';return false
+}catch(e){document.getElementById(t+'Error').textContent='Erro de conexão com o servidor';document.getElementById(t+'Error').style.display='block';return false}}
 if(localStorage.getItem('token')){window.location.href='/dashboard'}
 </script>
 </body>

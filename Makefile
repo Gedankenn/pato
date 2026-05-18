@@ -2,6 +2,8 @@ IMAGE = pato-backend
 CONTAINER = pato
 DB_PATH = /data/pato.db
 DATA_VOLUME = /mnt/user/appdata/pato/data
+SERVER = root@tower.local
+SERVER_DIR = /mnt/user/appdata/pato
 
 .PHONY: build restart deploy logs ssh sync
 
@@ -15,16 +17,14 @@ restart:
 		-v $(DATA_VOLUME):/data \
 		$(IMAGE)
 
-# Build + restart本地用：
 deploy: build restart
 
 logs:
 	docker logs -f $(CONTAINER)
 
 ssh:
-	ssh root@tower.local
+	ssh $(SERVER)
 
-# Sincronizar código do PC pro servidor e rebuildar
 sync:
 	rsync -avz --delete \
 		--exclude='.git' \
@@ -39,5 +39,5 @@ sync:
 		--exclude='whatsapp/public' \
 		--exclude='whatsapp/node_modules' \
 		--exclude='.opencode' \
-		/home/sabinho/github/pato/ root@tower.local:/mnt/user/appdata/pato/
-	ssh root@tower.local "cd /mnt/user/appdata/pato && make deploy"
+		/home/sabinho/github/pato/ $(SERVER):$(SERVER_DIR)
+	ssh $(SERVER) "cd $(SERVER_DIR) && docker build -t $(IMAGE) . && docker rm -f $(CONTAINER) 2>/dev/null && docker run -d --name $(CONTAINER) --network host --restart unless-stopped -e PATO_DB_PATH=$(DB_PATH) -v $(DATA_VOLUME):/data $(IMAGE)"
