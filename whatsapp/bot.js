@@ -82,7 +82,7 @@ client.on("auth_failure", (msg) => {
 });
 
 client.on("ready", () => {
-  console.log("🤖 Pato está pronto! Aguardando mensagens...");
+  console.log("🤖 PatoAgenda AI está pronto! Aguardando mensagens...");
   console.log(`📡 Conectado ao servidor: ${API_URL}`);
   console.log("");
   fs.writeFileSync(
@@ -123,7 +123,7 @@ client.on("message", async (message) => {
     await client.sendPresenceAvailable();
     await message.reply("⏱️ Um momento, estou verificando...");
 
-    // Enviar para o servidor Pato
+    // Enviar para o servidor PatoAgenda
     const response = await axios.post(
       `${API_URL}/chat`,
       {
@@ -142,7 +142,7 @@ client.on("message", async (message) => {
     }
   } catch (error) {
     if (error.code === "ECONNREFUSED") {
-      console.error("❌ Servidor Pato não está rodando!");
+      console.error("❌ Servidor PatoAgenda não está rodando!");
       await message.reply(
         "🛠️ Desculpe, estou tendo problemas técnicos. Tente novamente em alguns minutos."
       );
@@ -159,5 +159,5 @@ client.on("message", async (message) => {
 
 // ── Iniciar ────────────────────────────────────────────────────
 
-console.log("🚀 Iniciando Pato WhatsApp Bot...");
+console.log("🚀 Iniciando PatoAgenda AI WhatsApp Bot...");
 client.initialize();

@@ -1,7 +1,7 @@
 {
-  "name": "pato-whatsapp",
-  "version": "2.0.0",
-  "description": "Pato - Assistente de Agendamento Multi-tenant para WhatsApp",
+  "name": "patoagenda-whatsapp",
+  "version": "1.0.0",
+  "description": "PatoAgenda AI — WhatsApp Multi-session Manager",
   "scripts": {
     "start": "node manager.js",
     "dev": "node manager.js"

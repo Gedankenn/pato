@@ -1,2 +1,2 @@
-# pato
+# PatoAgenda AI — Agendamentos Inteligentes
 quack

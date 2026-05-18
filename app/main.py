@@ -10,6 +10,7 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Request, Query, Depends, Cookie
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.schemas import (
     AppointmentCreate,
     AppointmentReschedule,
@@ -24,7 +25,9 @@ from app import database as db
 from app.llm import SYSTEM_PROMPT
 from app.auth import create_token, get_current_barbershop_id, get_barbershop_id_from_request
 
-app = FastAPI(title="Pato - Multi-tenant Appointment Chatbot")
+app = FastAPI(title="PatoAgenda AI — Agendamentos Inteligentes")
+
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -327,16 +330,17 @@ def dashboard(request: Request):
 
     qr_block = ""
     if wa_status == "awaiting_scan":
-        qr_block = f"""<div class="card"><h2>📱 Conectar WhatsApp</h2><p>Escaneie o QR code com o WhatsApp da empresa:</p><p class="hint">WhatsApp > ⋮ > Aparelhos conectados > Conectar</p><img src="/whatsapp/qrcode" alt="QR Code"></div>"""
+        qr_block = f"""<div class="card"><h2>📱 Conectar WhatsApp</h2><p>Escaneie o QR code com o WhatsApp da empresa:</p><p class="hint">WhatsApp > ⋮ > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
 
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Pato - {shop['name']}</title>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>PatoAgenda AI - {shop['name']}</title><link rel="icon" type="image/png" href="/static/logo.png">
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
-.header{{background:#1a73e8;color:#fff;padding:24px;text-align:center}}
-.header h1{{font-size:26px}}
+.header{{background:#1a73e8;color:#fff;padding:20px;text-align:center}}
+.header .logo{{width:80px;height:80px;border-radius:50%;object-fit:cover;margin-bottom:4px;background:#fff;padding:4px}}
+.header h1{{font-size:24px;margin-top:4px}}
 .container{{max-width:900px;margin:20px auto;padding:0 16px}}
 .card{{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
 .card h2{{margin-bottom:12px;font-size:18px}}
@@ -352,20 +356,21 @@ th{{color:#666;font-weight:600}}
 .s-scheduled{{color:#1e7e34}}
 .s-rescheduled{{color:#e37400}}
 .s-cancelled{{color:#c5221f;text-decoration:line-through}}
-img{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
+img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
+.box .logo{{width:100px;height:100px;border-radius:50%;object-fit:cover;margin-bottom:8px}}
 .empty{{text-align:center;color:#999;padding:30px}}
 .ftr{{text-align:center;padding:20px;color:#999;font-size:13px}}
 .logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
 </style></head>
 <body>
-<div class="header"><h1>🦆 Pato</h1><p>{shop['name']} <a href="/logout" class="logout">sair</a></p></div>
+<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1><p>{shop['name']} <a href="/logout" class="logout">sair</a></p></div>
 <div class="container">
 <div class="card"><h2>🤖 WhatsApp</h2><span class="badge b-{wa_status}">{wa_status}</span></div>
 {qr_block}
 <div class="card"><h2>📋 Agendamentos</h2>
 {"<table><thead><tr><th>#</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if appointments else '<p class="empty">Nenhum agendamento</p>'}
 </div></div>
-<div class="ftr">Pato v1.0</div>
+<div class="ftr">PatoAgenda AI v1.0 — Agendamentos Inteligentes</div>
 <script>setTimeout(()=>location.reload(),15000)</script>
 </body></html>""")
 
@@ -374,7 +379,7 @@ img{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 
 LOGIN_PAGE = """<!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Pato - Login</title>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>PatoAgenda AI - Login</title><link rel="icon" type="image/png" href="/static/logo.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,sans-serif;background:#f0f2f5;display:flex;justify-content:center;align-items:center;min-height:100vh}
@@ -394,7 +399,7 @@ button:hover{background:#1557b0}
 </head>
 <body>
 <div class="box">
-<h1>🦆 Pato</h1><p>Gestão de Agendamentos</p>
+<img src="/static/logo.png" style="width:100px;height:100px;border-radius:50%;object-fit:cover;margin-bottom:8px"><h1>PatoAgenda AI</h1><p>Agendamentos Inteligentes</p>
 <div class="tab"><div id="tabLogin" class="active" onclick="showTab('login')">Entrar</div><div id="tabReg" onclick="showTab('register')">Cadastrar</div></div>
 <form id="loginForm" onsubmit="return submitForm('login')">
 <input type="email" id="loginEmail" placeholder="Email" required>

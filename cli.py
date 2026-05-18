@@ -9,7 +9,7 @@ console = Console()
 
 
 def main():
-    console.print(Panel.fit("🦆 Pato - AI Appointment Assistant", style="bold cyan"))
+    console.print(Panel.fit("🦆 PatoAgenda AI — Agendamentos Inteligentes", style="bold cyan"))
     console.print("Type your message. Use [bold]/quit[/bold] to exit.\n")
 
     thread_id = None
@@ -35,7 +35,7 @@ def main():
 
             thread_id = data["thread_id"]
             reply = data["reply"]
-            panel = Panel(Markdown(reply), title="🤖 Pato", border_style="cyan")
+            panel = Panel(Markdown(reply), title="🤖 PatoAgenda AI", border_style="cyan")
             console.print(panel)
             console.print()
 

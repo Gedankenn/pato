@@ -168,7 +168,7 @@ app.delete("/manager/stop/:id", (req, res) => {
 // ── Start ───────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  console.log(`🤖 Pato WhatsApp Manager rodando na porta ${PORT}`);
+  console.log(`🤖 PatoAgenda AI — WhatsApp Manager rodando na porta ${PORT}`);
   console.log(`📡 Backend: ${API_URL}`);
 
   // Auto-start sessions for existing barbershops
