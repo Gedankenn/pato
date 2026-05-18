@@ -370,7 +370,7 @@ img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 <div class="card"><h2>📋 Agendamentos</h2>
 {"<table><thead><tr><th>#</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if appointments else '<p class="empty">Nenhum agendamento</p>'}
 </div></div>
-<div class="ftr">PatoAgenda AI v1.0 — Agendamentos Inteligentes</div>
+<div class="ftr">PatoAgenda AI v1.0 — Agendamentos Inteligentes — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 <script>setTimeout(()=>location.reload(),15000)</script>
 </body></html>""")
 
@@ -427,6 +427,7 @@ localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);
 }catch(e){document.getElementById(t+'Error').textContent='Erro de conexão com o servidor';document.getElementById(t+'Error').style.display='block'}}
 if(localStorage.getItem('token')){window.location.href='/dashboard'}
 </script>
+<div style="text-align:center;padding:20px;color:#999;font-size:13px;margin-top:20px">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 </body>
 </html>"""
 
