@@ -731,7 +731,8 @@ const HOURS = [];
 for(let h=8;h<=20;h++){HOURS.push(('0'+h).slice(-2)+':00')}
 const SERVICES = SERVICES_JSON;
 let filterService = '';
-function getMon(d){d=new Date(d);var day=d.getDay();d.setDate(d.getDate()-(day===0?6:day-1));return d}
+function parseLocal(s){var p=s.split('-');return new Date(+p[0],+p[1]-1,+p[2])}
+function getMon(d){d=parseLocal(d);var day=d.getDay();d.setDate(d.getDate()-(day===0?6:day-1));return d}
 function fmtDate(d){var m=d.getMonth()+1;return d.getFullYear()+'-'+('0'+m).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
 function fmtBr(d){return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)}
 function esc(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
