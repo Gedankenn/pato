@@ -1128,7 +1128,6 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#111;h
 .hdr .icn{display:flex;gap:6px}
 .hdr .icn svg{width:22px;height:22px;fill:#fff;opacity:.8;cursor:pointer}
 .chat{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:4px;background:#e5ddd5}
-.chat .dt{text-align:center;font-size:12px;color:#888;margin:8px 0 4px;background:#e1f3fb;display:inline-block;padding:4px 12px;border-radius:6px;align-self:center}
 .bbl{max-width:88%;padding:8px 12px;border-radius:8px;font-size:14.5px;line-height:1.45;position:relative;word-wrap:break-word;white-space:pre-wrap;animation:fadeIn .2s}
 .bbl p{margin:0}
 .bbl .tm{font-size:11px;color:#999;text-align:right;margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:3px}
@@ -1148,7 +1147,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#111;h
 .typing span:nth-child(3){animation-delay:.4s}
 @keyframes bounce{0%,80%,100%{transform:scale(.6)}40%{transform:scale(1)}}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-.sc{display:flex;align-items:center;justify-content:center;height:100%;color:#999;flex-direction:column;gap:10px;text-align:center;padding:20px}
+.sc{display:flex;align-items:center;justify-content:center;height:100%;color:#999;flex-direction:column;gap:10px;text-align:center;padding:20px;font-size:15px}
 .sc svg{width:60px;height:60px;fill:#ddd}
 </style>
 </head>
@@ -1156,49 +1155,90 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#111;h
 <div id="app">
 <div class="hdr">
 <img src="/static/logo.png" alt="P">
-<div class="nm"><b>PatoBarba</b><small>online</small></div>
+<div class="nm"><b>PatoBarba</b><small id="status">conectando...</small></div>
 <div class="icn">
 <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
 <svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
 </div>
 </div>
-<div class="chat" id="chat"><div class="sc"><svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>Conectando...</div></div>
+<div class="chat" id="chat"><div class="sc" id="welcome"><svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg><span id="wlcm">Conectando...</span></div></div>
 <div class="inp">
-<input id="inp" placeholder="Digite sua mensagem" autofocus>
-<button id="btn" onclick="send()"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1.101 21.757L23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"/></svg></button>
+<input id="inp" placeholder="Digite sua mensagem" disabled>
+<button id="btn" disabled><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1.101 21.757L23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"/></svg></button>
 </div>
 </div>
 <script>
-let tok=localStorage.getItem('patobarba_token'),tid=localStorage.getItem('patobarba_tid'),chatEl=document.getElementById('chat'),inp=document.getElementById('inp'),btn=document.getElementById('btn');
-function esc(s){const d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
-function tm(){const d=new Date();return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')}
+(function(){
+var tok=localStorage.getItem('patobarba_token'),tid=localStorage.getItem('patobarba_tid');
+var chat=document.getElementById('chat'),inp=document.getElementById('inp'),btn=document.getElementById('btn');
+var st=document.getElementById('status'),wl=document.getElementById('wlcm');
+
+function esc(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
+function tm(){var d=new Date();return('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)}
+
 function addMsg(text,role){
-const d=document.createElement('div');d.className='bbl '+role;
+var d=document.createElement('div');d.className='bbl '+role;
 d.innerHTML='<p>'+esc(text)+'</p><div class="tm">'+tm()+(role==='user'?'<span class="dd">✓✓</span>':'')+'</div>';
-chatEl.appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'});
-localStorage.setItem('patobarba_msgs',JSON.stringify([...document.querySelectorAll('.bbl')].map(m=>({t:m.querySelector('p').textContent,r:m.classList.contains('user')?'user':'ai',h:m.querySelector('.tm').textContent.trim()}))));
+chat.appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'});
+try{localStorage.setItem('patobarba_msgs',JSON.stringify(Array.from(document.querySelectorAll('.bbl')).map(function(m){return{t:m.querySelector('p').textContent,r:m.classList.contains('user')?'user':'ai',h:m.querySelector('.tm').textContent.trim()}})))}catch(e){}
 }
-function typing(on){const e=chatEl.querySelector('.typing');if(on&&!e){const d=document.createElement('div');d.className='typing';d.innerHTML='<span></span><span></span><span></span>';chatEl.appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'})}else if(!on&&e)e.remove()}
-function loadMsgs(){try{const m=JSON.parse(localStorage.getItem('patobarba_msgs')||'[]');m.forEach(x=>{const d=document.createElement('div');d.className='bbl '+x.r;d.innerHTML='<p>'+esc(x.t)+'</p><div class="tm">'+esc(x.h)+'</div>';chatEl.appendChild(d)});document.querySelector('.sc')?.remove()}catch(e){}}
+
+function typing(on){
+var e=chat.querySelector('.typing');
+if(on&&!e){var d=document.createElement('div');d.className='typing';d.innerHTML='<span></span><span></span><span></span>';chat.appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'})}
+else if(!on&&e)e.remove()
+}
+
+function connected(){
+st.textContent='online';st.style.color='#7fefa7';
+wl.textContent='Ol\u00e1! Como posso ajudar?';
+inp.disabled=false;btn.disabled=false;inp.focus();
+}
+
+function loadMsgs(){
+try{
+var m=JSON.parse(localStorage.getItem('patobarba_msgs')||'[]');
+m.forEach(function(x){
+var d=document.createElement('div');d.className='bbl '+x.r;
+d.innerHTML='<p>'+esc(x.t)+'</p><div class="tm">'+esc(x.h)+'</div>';
+chat.appendChild(d)
+});
+var sc=document.getElementById('welcome');if(sc)sc.remove()
+}catch(e){}
+}
+
 loadMsgs();
-async function send(){
-const text=inp.value.trim();if(!text||btn.disabled)return;
+
+window.send=async function(){
+var text=inp.value.trim();if(!text||btn.disabled)return;
 inp.value='';btn.disabled=true;
 addMsg(text,'user');typing(true);
 try{
-const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({message:text,thread_id:tid||null})});
-const d=await res.json();
+var res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({message:text,thread_id:tid||null})});
+var d=await res.json();
 if(d.thread_id){tid=d.thread_id;localStorage.setItem('patobarba_tid',tid)}
 typing(false);
-if(d.reply)addMsg(d.reply,'ai');
-else addMsg('(sem resposta)','ai');
-}catch(e){typing(false);addMsg('Erro de conexão.','ai')}
+if(d.reply)addMsg(d.reply,'ai');else addMsg('(sem resposta)','ai')
+}catch(e){typing(false);addMsg('Erro de conex\u00e3o.','ai')}
 btn.disabled=false;inp.focus();
+};
+
+inp.addEventListener('keydown',function(e){if(e.key==='Enter')window.send()});
+btn.addEventListener('click',window.send);
+
+var wlcm=document.getElementById('welcome');
+if(tok&&tok!=='null'&&tok!=='undefined'){
+connected();
+}else{
+fetch('/demo/login',{method:'POST'}).then(function(r){return r.json()}).then(function(d){
+tok=d.token;localStorage.setItem('patobarba_token',tok);
+connected();
+}).catch(function(){
+st.textContent='erro de conex\u00e3o';st.style.color='#ff6b6b';
+wl.textContent='N\u00e3o foi poss\u00edvel conectar. Recarregue a p\u00e1gina.';
+})
 }
-inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
-if(!tok){
-fetch('/demo/login',{method:'POST'}).then(r=>r.json()).then(d=>{tok=d.token;localStorage.setItem('patobarba_token',tok);document.querySelector('.sc')&&(document.querySelector('.sc').innerHTML='<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>Olá! Como posso ajudar? 💈'});
-}
+})();
 </script>
 </body>
 </html>"""
