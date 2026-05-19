@@ -910,6 +910,39 @@ def config_page(request: Request):
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
+.header{{background:#1a73e8;color:#fff;padding:16px 20px;text-align:center}}
+.header .logo{{width:60px;height:60px;border-radius:50%;object-fit:cover;background:#fff;padding:4px;margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
+.header h1{{font-size:20px}}
+.header p{{font-size:13px;margin-top:4px}}
+.header p a{{color:#fff;text-decoration:none}}
+.header p a:hover{{text-decoration:underline}}
+.logout{{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}}
+.container{{max-width:900px;margin:16px auto;padding:0 12px}}
+.card{{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
+.card h2{{margin-bottom:8px;font-size:16px}}
+.badge{{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}}
+.b-connected{{background:#e6f4ea;color:#1e7e34}}
+.b-awaiting_scan{{background:#fef7e0;color:#e37400}}
+.b-inactive,.b-unknown{{background:#f1f3f4;color:#5f6368}}
+.b-disconnected{{background:#fce8e6;color:#c5221f}}
+img.qr{{display:block;margin:12px auto;width:220px;image-rendering:pixelated}}
+.ftr{{text-align:center;padding:16px;color:#999;font-size:12px}}
+table{{width:100%;border-collapse:collapse}}
+th,td{{padding:8px;text-align:left;border-bottom:1px solid #eee;font-size:13px}}
+th{{color:#666;font-weight:600}}
+input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;width:100%;margin-bottom:8px}}
+.btn{{display:inline-block;padding:8px 16px;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}}
+.btn-primary{{background:#1a73e8;color:#fff}}
+.btn-primary:hover{{background:#1557b0}}
+.btn-danger{{background:#c5221f;color:#fff}}
+.btn-sm{{padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:13px}}
+.form-row{{display:flex;gap:8px;align-items:end;flex-wrap:wrap}}
+.form-row .field{{flex:1;min-width:120px}}
+.form-row .field label{{display:block;font-size:13px;color:#666;margin-bottom:4px}}
+.empty{{text-align:center;color:#999;padding:30px}}
+.msg{{padding:10px;border-radius:6px;margin-bottom:12px;display:none}}
+.msg-success{{background:#e6f4ea;color:#1e7e34;display:block}}
+.msg-error{{background:#fce8e6;color:#c5221f;display:block}}
 </style></head>
 <body>
 {_header_html(shop['name'], 'config', bool(shop.get('is_admin')))}
