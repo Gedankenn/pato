@@ -38,8 +38,9 @@ app.add_middleware(
 )
 
 WEBHOOK_VERIFY_TOKEN = os.environ.get("WEBHOOK_VERIFY_TOKEN", "pato123")
-WHATSAPP_DATA_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "whatsapp", "data"
+WHATSAPP_DATA_DIR = os.environ.get(
+    "WHATSAPP_DATA_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "whatsapp", "data"),
 )
 
 
