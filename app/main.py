@@ -2,6 +2,7 @@ import json
 import os
 import re
 from datetime import datetime, timedelta
+import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -76,12 +77,16 @@ def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str |
         title = params.get("title", "").strip()
         if not title:
             return "Title is required. Ask the customer what service they want.", None
+        start = params.get("start_time")
+        end = params.get("end_time")
+        if not start or not end:
+            return "start_time and end_time are required. Ask the customer when they want to book.", None
         appt_id = db.create_appointment(
             barbershop_id=barbershop_id,
             title=title,
             description=params.get("description", ""),
-            start_time=params["start_time"],
-            end_time=params["end_time"],
+            start_time=start,
+            end_time=end,
         )
         a = db.get_appointment(barbershop_id, appt_id)
         return f"Created: {format_appointment(a)}", appt_id
@@ -93,9 +98,12 @@ def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str |
         return "\n".join(format_appointment(a) for a in appointments), None
 
     elif action == "get_appointment":
-        a = db.get_appointment(barbershop_id, params["appointment_id"])
+        aid = params.get("appointment_id")
+        if not aid:
+            return "appointment_id is required.", None
+        a = db.get_appointment(barbershop_id, aid)
         if not a:
-            return f"Appointment #{params['appointment_id']} not found.", None
+            return f"Appointment #{aid} not found.", None
         return (
             f"Appointment #{a['id']}: {a['title']}\n"
             f"  Description: {a['description']}\n"
@@ -105,39 +113,52 @@ def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str |
         ), None
 
     elif action == "reschedule_appointment":
-        success = db.reschedule_appointment(
-            barbershop_id,
-            params["appointment_id"],
-            params["new_start_time"],
-            params["new_end_time"],
-        )
+        aid = params.get("appointment_id")
+        new_start = params.get("new_start_time")
+        new_end = params.get("new_end_time")
+        if not aid or not new_start or not new_end:
+            return "appointment_id, new_start_time and new_end_time are required.", None
+        success = db.reschedule_appointment(barbershop_id, aid, new_start, new_end)
         if not success:
-            return f"Appointment #{params['appointment_id']} not found.", None
-        a = db.get_appointment(barbershop_id, params["appointment_id"])
+            return f"Appointment #{aid} not found.", None
+        a = db.get_appointment(barbershop_id, aid)
         return f"Rescheduled: {format_appointment(a)}", None
 
     elif action == "cancel_appointment":
-        success = db.cancel_appointment(barbershop_id, params["appointment_id"])
+        aid = params.get("appointment_id")
+        if not aid:
+            return "appointment_id is required. Ask which appointment to cancel.", None
+        success = db.cancel_appointment(barbershop_id, aid)
         if not success:
-            return f"Appointment #{params['appointment_id']} not found.", None
-        a = db.get_appointment(barbershop_id, params["appointment_id"])
-        return f"Cancelled: {format_appointment(a)}", None
+            return f"Appointment #{aid} not found.", None
+        a = db.get_appointment(barbershop_id, aid)
+        cancelled_start = a["start_time"]
+        nearby = db.list_appointments(barbershop_id, status="scheduled")
+        suggestions = []
+        for na in nearby:
+            if abs((datetime.fromisoformat(na["start_time"]) - datetime.fromisoformat(cancelled_start)).total_seconds()) < 7200:
+                suggestions.append(f"- {na['title']} #{na['id']} em {na['start_time'][:16]}")
+        result = f"Cancelled: {format_appointment(a)}"
+        if suggestions:
+            result += "\n\nHorários próximos que ainda estão ocupados:\n" + "\n".join(suggestions) + "\n\nPergunte ao cliente se ele quer avisar alguém ou se há interesse em reagendar um desses para o horário liberado."
+        return result, None
 
     elif action == "update_appointment":
+        aid = params.get("appointment_id")
+        if not aid:
+            return "appointment_id is required.", None
         success = db.update_appointment(
             barbershop_id,
-            params["appointment_id"],
+            aid,
             title=params.get("title"),
             description=params.get("description"),
         )
         if not success:
-            return f"Appointment #{params['appointment_id']} not found.", None
-        a = db.get_appointment(barbershop_id, params["appointment_id"])
+            return f"Appointment #{aid} not found.", None
+        a = db.get_appointment(barbershop_id, aid)
         return f"Updated: {format_appointment(a)}", None
 
     return None, None
-
-    return f"Unknown action: {action}"
 
 
 def extract_json(text: str) -> dict | None:
@@ -160,7 +181,6 @@ def call_llm(messages: list) -> str:
         model=LLM_MODEL,
         messages=messages,
         temperature=0.1,
-        max_tokens=512,
     )
     return response.choices[0].message.content or ""
 
@@ -210,24 +230,6 @@ def register(body: RegisterRequest):
 # ── Chat ────────────────────────────────────────────────────────
 
 _last_appointment: dict[str, int] = {}
-
-_NAME_RE = re.compile(
-    r"(?:pode ser para (?:o |a )?|é para (?:o |a )?|é |(?:o |a )?nome (?:do cliente )?é )(.+?)\s*$",
-    re.IGNORECASE,
-)
-
-
-def _extract_name(text: str) -> str | None:
-    m = _NAME_RE.search(text.strip())
-    if not m:
-        return None
-    name = m.group(1).strip()
-    if not name or len(name) < 2 or len(name) > 50:
-        return None
-    if name.lower() in ("hoje", "amanhã", "agora", "depois", "cedo", "tarde", "noite", "manhã", "sim", "não", "ok"):
-        return None
-    return name
-
 
 _WEEKDAYS = {"segunda": 0, "terça": 1, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4, "sábado": 5, "sabado": 5, "domingo": 6}
 
@@ -285,15 +287,20 @@ def _resolve_dates(text: str) -> str:
     return result
 
 
-def _build_prompt(barbershop_id: int) -> str:
+def _build_prompt(barbershop_id: int, thread_id: str | None = None) -> str:
     services = db.list_services(barbershop_id)
+    base = SYSTEM_PROMPT
     if services:
         lines = "\n".join(
-            f"  - {s['name']}: R$ {s['price_cents']/100:.2f}, duração {s['duration_minutes']}min"
+            f"  - {s['name']}: R$ {s['price']:.2f} ({s['duration_minutes']}min)"
             for s in services
         )
-        return SYSTEM_PROMPT + f"\n\n== SERVIÇOS DISPONÍVEIS ==\n{lines}\n\nUse esta lista para informar preços e durações quando o cliente perguntar."
-    return SYSTEM_PROMPT
+        base += f"\n\nSERVIÇOS DA BARBEARIA:\n{lines}\n\nUse esta lista para informar preços e durações quando o cliente perguntar."
+    if thread_id and thread_id in _last_appointment:
+        a = db.get_appointment(barbershop_id, _last_appointment[thread_id])
+        if a and a["status"] == "scheduled":
+            base += f"\n\núltimo agendamento deste cliente: #{a['id']} ({a['title']} às {a['start_time'][:16]})."
+    return base
 
 
 @app.post("/chat", response_model=MessageResponse)
@@ -303,38 +310,23 @@ def chat(
 ):
     thread_id = request.thread_id or f"thread_{datetime.utcnow().timestamp()}"
 
-    # Auto-assign name to last created appointment
-    name = _extract_name(request.message)
-    if name and thread_id in _last_appointment:
-        db.update_appointment(
-            barbershop_id,
-            _last_appointment[thread_id],
-            description=name,
-        )
-        reply = f"Anotado! É para o {name} ✅"
-        db.save_message(thread_id, "user", request.message)
-        db.save_message(thread_id, "assistant", json.dumps({
-            "action": "update_appointment",
-            "parameters": {"appointment_id": _last_appointment[thread_id], "description": name},
-            "message": reply,
-        }))
-        return MessageResponse(reply=reply, thread_id=thread_id)
-
     resolved = _resolve_dates(request.message)
     db.save_message(thread_id, "user", resolved)
 
     prior = db.get_conversation(thread_id, limit=12)
-    prompt = _build_prompt(barbershop_id)
+    prompt = _build_prompt(barbershop_id, thread_id)
     history = [{"role": "system", "content": prompt}] + prior
+
+    action_executed = False
 
     for iteration in range(3):
         raw = call_llm(history)
         parsed = extract_json(raw)
 
         if not parsed or not isinstance(parsed, dict):
-            db.save_message(thread_id, "assistant", "I couldn't process that request.")
+            db.save_message(thread_id, "assistant", "Desculpe, não entendi. Pode repetir?")
             return MessageResponse(
-                reply="I couldn't process that request. Could you rephrase?",
+                reply="Desculpe, não entendi. Pode repetir?",
                 thread_id=thread_id,
             )
 
@@ -342,25 +334,61 @@ def chat(
         params = parsed.get("parameters", {})
         msg = parsed.get("message", "")
 
-        if action == "reply" or iteration == 2:
-            reply = msg or "I've processed your request."
+        # Hallucination guard: only on first turn, before any real action
+        if action == "reply" and not action_executed:
+            lower_msg = msg.lower()
+            hallucination_keywords = [
+                "foi cancelado", "cancelado com sucesso", "cancelado!",
+                "foi criado", "criado com sucesso",
+                "foi remarcado", "remarcado com sucesso",
+                "foi reagendado",
+            ]
+            if any(w in lower_msg for w in hallucination_keywords):
+                history.append({"role": "assistant", "content": raw})
+                history.append({
+                    "role": "user",
+                    "content": "Você disse que realizou uma ação mas usou 'reply'. Você PRECISA usar a action correta (create_appointment, cancel_appointment, etc) para executar a ação. NÃO finja que executou. Responda APENAS com JSON contendo a action correta."
+                })
+                continue
+
+        # If already executed an action and LLM tries another, block it
+        if action_executed and action != "reply":
+            result, _ = execute_action(action, params, barbershop_id)
+            reply = result or msg or "Concluído."
             db.save_message(thread_id, "assistant", reply)
             return MessageResponse(reply=reply, thread_id=thread_id)
 
         result, created_id = execute_action(action, params, barbershop_id)
 
         if result is None:
-            db.save_message(thread_id, "assistant", msg or "I couldn't process that request.")
-            return MessageResponse(reply=msg or "I couldn't process that request.", thread_id=thread_id)
+            db.save_message(thread_id, "assistant", msg or "Desculpe, não entendi. Pode repetir?")
+            return MessageResponse(reply=msg or "Desculpe, não entendi. Pode repetir?", thread_id=thread_id)
+
+        if action == "reply" or iteration == 2:
+            reply = msg or result or "Desculpe, não entendi. Pode repetir?"
+            db.save_message(thread_id, "assistant", reply)
+            return MessageResponse(reply=reply, thread_id=thread_id)
+
+        action_executed = True
 
         if created_id:
             _last_appointment[thread_id] = created_id
+            a = db.get_appointment(barbershop_id, created_id)
+            history.append({
+                "role": "system",
+                "content": f"Appointment #{created_id} ({a['title']}) created for this client."
+            })
 
+        # Action succeeded — let the LLM craft a natural reply
         history.append({"role": "assistant", "content": raw})
         history.append({
             "role": "user",
-            "content": f"Action executed. Result:\n{result}\nNow reply to the customer with a friendly message.",
+            "content": f"Ação executada. Resultado:\n{result}\nAgora responda ao cliente em português natural. Use APENAS a ação reply."
         })
+    # Fallback if loop exhausts without returning
+    db.save_message(thread_id, "assistant", "Desculpe, não consegui processar. Pode repetir?")
+    return MessageResponse(reply="Desculpe, não consegui processar. Pode repetir?", thread_id=thread_id)
+    return MessageResponse(reply="Desculpe, não consegui processar. Pode repetir?", thread_id=thread_id)
 
 
 # ── Appointment endpoints (scoped) ──────────────────────────────
@@ -445,7 +473,7 @@ def create_service(
     body: ServiceCreate,
     barbershop_id: int = Depends(get_current_barbershop_id),
 ):
-    svc_id = db.create_service(barbershop_id, body.name, body.duration_minutes, body.price_cents)
+    svc_id = db.create_service(barbershop_id, body.name, body.duration_minutes, body.price)
     row = db.get_connection().execute("SELECT * FROM services WHERE id = ?", (svc_id,)).fetchone()
     return _row_to_svc(row)
 
@@ -456,7 +484,7 @@ def update_service(
     body: ServiceUpdate,
     barbershop_id: int = Depends(get_current_barbershop_id),
 ):
-    ok = db.update_service(service_id, barbershop_id, body.name, body.duration_minutes, body.price_cents, body.active)
+    ok = db.update_service(service_id, barbershop_id, body.name, body.duration_minutes, body.price, body.active)
     if not ok:
         raise HTTPException(status_code=404, detail="Service not found")
     row = db.get_connection().execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
@@ -490,6 +518,38 @@ def get_whatsapp_status(barbershop_id: int = Depends(get_current_barbershop_id))
     if os.path.exists(status_path):
         return JSONResponse(json.load(open(status_path)))
     return JSONResponse({"status": "inactive"})
+
+
+# ── Admin: WhatsApp ────────────────────────────────────────────
+
+WHATSAPP_MANAGER_URL = os.environ.get("WHATSAPP_MANAGER_URL", "http://localhost:8001")
+
+@app.post("/admin/start-whatsapp/{barbershop_id}")
+def admin_start_whatsapp(barbershop_id: int, _=Depends(require_admin)):
+    import httpx
+    try:
+        resp = httpx.post(f"{WHATSAPP_MANAGER_URL}/manager/start", json={"barbershop_id": barbershop_id}, timeout=10)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="WhatsApp manager error")
+        return resp.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach WhatsApp manager: {e}")
+
+
+@app.get("/admin/whatsapp/status/{barbershop_id}")
+def admin_whatsapp_status(barbershop_id: int, _=Depends(require_admin)):
+    status_path = os.path.join(get_wa_status_dir(barbershop_id), "status.json")
+    if os.path.exists(status_path):
+        return JSONResponse(json.load(open(status_path)))
+    return JSONResponse({"status": "inactive"})
+
+
+@app.get("/admin/whatsapp/qrcode/{barbershop_id}")
+def admin_whatsapp_qrcode(barbershop_id: int, _=Depends(require_admin)):
+    qr_path = os.path.join(get_wa_status_dir(barbershop_id), "qrcode.png")
+    if os.path.exists(qr_path):
+        return FileResponse(qr_path, media_type="image/png")
+    return JSONResponse({"error": "QR code not available"}, status_code=404)
 
 
 # ── Dashboard (scoped) ──────────────────────────────────────────
@@ -575,13 +635,20 @@ def config_page(request: Request):
         return RedirectResponse(url="/login")
     shop = db.get_barbershop(barbershop_id)
     services = db.list_services(barbershop_id, active_only=False)
+    wa_status = "inactive"
+    wa_status_path = os.path.join(get_wa_status_dir(barbershop_id), "status.json")
+    if os.path.exists(wa_status_path):
+        wa_status = json.load(open(wa_status_path)).get("status", "inactive")
+    qr_block = ""
+    if wa_status == "awaiting_scan":
+        qr_block = f"""<div class="card"><h2>📱 Escaneie o QR Code</h2><p>Abra o WhatsApp no celular > ⋮ > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
 
     svc_rows = "".join(
         f"""<tr id="svc-{s['id']}"><td>{s['name']}</td><td>{s['duration_minutes']}min</td>
-        <td>R$ {s['price_cents']/100:.2f}</td>
+        <td>R$ {s['price']:.2f}</td>
         <td><span class="badge {'b-connected' if s['active'] else 'b-inactive'}">{'ativo' if s['active'] else 'inativo'}</span></td>
         <td>
-          <button class="btn-sm" onclick="editSvc({s['id']},'{s['name']}',{s['duration_minutes']},{s['price_cents']},{int(s['active'])})">✏️</button>
+          <button class="btn-sm" onclick="editSvc({s['id']},'{s['name']}',{s['duration_minutes']},{s['price']},{int(s['active'])})">✏️</button>
           <button class="btn-sm btn-danger" onclick="delSvc({s['id']})">🗑️</button>
         </td></tr>"""
         for s in services
@@ -601,7 +668,10 @@ body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
 .card h2{{margin-bottom:12px;font-size:18px}}
 .badge{{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:600}}
 .b-connected{{background:#e6f4ea;color:#1e7e34}}
-.b-inactive{{background:#f1f3f4;color:#5f6368}}
+.b-awaiting_scan{{background:#fef7e0;color:#e37400}}
+.b-inactive,.b-unknown{{background:#f1f3f4;color:#5f6368}}
+.b-disconnected{{background:#fce8e6;color:#c5221f}}
+img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 table{{width:100%;border-collapse:collapse}}
 th,td{{padding:10px 8px;text-align:left;border-bottom:1px solid #eee;font-size:14px}}
 th{{color:#666;font-weight:600}}
@@ -656,6 +726,12 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
   <p>Os serviços cadastrados aqui são enviados automaticamente para a IA. Quando um cliente perguntar "quanto custa?" ou "qual o valor?", a IA consulta esta lista para responder com os preços corretos.</p>
 </div>
 
+<div class="card">
+  <h2>📱 WhatsApp</h2>
+  <p>Status: <span class="badge b-{wa_status}">{wa_status}</span></p>
+  {qr_block}
+</div>
+
 </div>
 <div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 
@@ -681,15 +757,15 @@ async function api(method, path, body) {{
 async function createSvc() {{
   const name = document.getElementById('svcName').value.trim();
   const duration = parseInt(document.getElementById('svcDuration').value);
-  const price = Math.round(parseFloat(document.getElementById('svcPrice').value) * 100);
+  const price = parseFloat(document.getElementById('svcPrice').value);
   const editId = document.getElementById('editId').value;
   if (!name) return msg('Informe o nome do serviço', 'error');
   try {{
     if (editId) {{
-      await api('PUT', '/services/' + editId, {{name, duration_minutes: duration, price_cents: price}});
+      await api('PUT', '/services/' + editId, {{name, duration_minutes: duration, price}});
       msg('Serviço atualizado!', 'success');
     }} else {{
-      await api('POST', '/services', {{name, duration_minutes: duration, price_cents: price}});
+      await api('POST', '/services', {{name, duration_minutes: duration, price}});
       msg('Serviço adicionado!', 'success');
     }}
     setTimeout(()=>location.reload(), 1000);
@@ -699,7 +775,7 @@ async function createSvc() {{
 function editSvc(id, name, duration, price, active) {{
   document.getElementById('svcName').value = name;
   document.getElementById('svcDuration').value = duration;
-  document.getElementById('svcPrice').value = (price / 100).toFixed(2);
+  document.getElementById('svcPrice').value = price.toFixed(2);
   document.getElementById('editId').value = id;
   document.getElementById('svcBtn').textContent = 'Salvar';
 }}
@@ -756,6 +832,8 @@ def admin_dashboard(request: Request):
         f"<tr><td>#{s['id']}</td><td>{s['name']}</td><td>{s['email']}</td>"
         f"<td>{s['whatsapp_number'] or '-'}</td>"
         f"<td>{'<span class=\"badge b-admin\">Admin</span>' if s['is_admin'] else '<span class=\"badge b-shop\">Loja</span>'}</td>"
+        f"<td><span id=\"wa-status-{s['id']}\">…</span></td>"
+        f"<td><button class=\"btn-sm\" onclick=\"generateQr({s['id']})\">📱 QR</button></td>"
         f"<td>{s['created_at'][:10]}</td></tr>"
         for s in shops
     )
@@ -786,9 +864,13 @@ body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#e0e0e0}}
 table{{width:100%;border-collapse:collapse;font-size:13px}}
 th,td{{padding:8px 6px;text-align:left;border-bottom:1px solid #0f3460}}
 th{{color:#888;font-weight:600}}
+.btn-sm{{padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:#0f3460;color:#e0e0e0}}
 .badge{{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}}
 .b-admin{{background:#e94560;color:#fff}}
 .b-shop{{background:#0f3460;color:#aaa}}
+.b-connected{{background:#1b5e20;color:#a5d6a7}}
+.b-awaiting_scan{{background:#e65100;color:#ffe0b2}}
+.b-inactive{{background:#263238;color:#90a4ae}}
 .s-scheduled{{color:#4ecca3}}
 .s-rescheduled{{color:#ffc857}}
 .s-cancelled{{color:#e94560;text-decoration:line-through}}
@@ -805,13 +887,42 @@ th{{color:#888;font-weight:600}}
 </div>
 <div class="container">
 <div class="card"><h2>🏢 Empresas</h2>
-{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>Criado</th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
+{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>WA Status</th><th></th><th>Criado</th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
 </div>
 <div class="card"><h2>📋 Todos Agendamentos</h2>
 {"<table><thead><tr><th>#</th><th>Empresa</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if apps else '<p style="color:#888">Nenhum agendamento</p>'}
 </div>
 </div>
 <div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#555;text-decoration:none">fabiostella@gmail.com</a></div>
+<script>
+const TOKEN = localStorage.getItem('token');
+async function generateQr(id) {{
+  if (!confirm('Gerar QR Code do WhatsApp para esta loja?')) return;
+  try {{
+    const r = await fetch('/admin/start-whatsapp/' + id, {{method:'POST', headers:{{'Authorization':'Bearer '+TOKEN}}}});
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || 'Erro');
+    document.getElementById('wa-status-'+id).textContent = 'gerando…';
+    setTimeout(()=>checkStatus(id), 2000);
+  }} catch(e) {{ alert(e.message); }}
+}}
+async function checkStatus(id) {{
+  try {{
+    const r = await fetch('/admin/whatsapp/status/' + id, {{headers:{{'Authorization':'Bearer '+TOKEN}}}});
+    const d = await r.json();
+    const el = document.getElementById('wa-status-'+id);
+    el.textContent = d.status;
+    el.className = 'badge b-' + (d.status === 'connected' ? 'connected' : d.status === 'awaiting_scan' ? 'awaiting_scan' : d.status === 'inactive' ? 'inactive' : 'unknown');
+  }} catch(e) {{}}
+}}
+(async function init() {{
+  const ids = document.querySelectorAll('[id^="wa-status-"]');
+  for (const el of ids) {{
+    const id = el.id.replace('wa-status-', '');
+    await checkStatus(parseInt(id));
+  }}
+}})();
+</script>
 </body></html>""")
 
 
@@ -905,24 +1016,14 @@ def wa_message_webhook(request: Request):
 
     thread_id = f"wa_{barbershop_id}_{wa_number}"
 
-    name = _extract_name(text)
-    if name and thread_id in _last_appointment:
-        db.update_appointment(
-            barbershop_id,
-            _last_appointment[thread_id],
-            description=name,
-        )
-        reply = f"Anotado! É para o {name} ✅"
-        db.save_message(thread_id, "user", text)
-        db.save_message(thread_id, "assistant", reply)
-        return {"reply": reply, "barbershop_id": barbershop_id}
-
     resolved = _resolve_dates(text)
     db.save_message(thread_id, "user", resolved)
 
     prior = db.get_conversation(thread_id, limit=12)
-    prompt = _build_prompt(barbershop_id)
+    prompt = _build_prompt(barbershop_id, thread_id)
     history = [{"role": "system", "content": prompt}] + prior
+
+    action_executed = False
 
     for iteration in range(3):
         raw = call_llm(history)
@@ -935,19 +1036,55 @@ def wa_message_webhook(request: Request):
         action = parsed.get("action", "reply")
         params = parsed.get("parameters", {})
         msg = parsed.get("message", "")
-        result, created_id = execute_action(action, params, barbershop_id)
 
-        if action == "reply" or result is None or iteration == 2:
-            reply = msg or "Processado."
+        # Hallucination guard: only on first turn, before any real action
+        if action == "reply" and not action_executed:
+            lower_msg = msg.lower()
+            hallucination_keywords = [
+                "foi cancelado", "cancelado com sucesso", "cancelado!",
+                "foi criado", "criado com sucesso",
+                "foi remarcado", "remarcado com sucesso",
+                "foi reagendado",
+            ]
+            if any(w in lower_msg for w in hallucination_keywords):
+                history.append({"role": "assistant", "content": raw})
+                history.append({
+                    "role": "user",
+                    "content": "Você disse que realizou uma ação mas usou 'reply'. Você PRECISA usar a action correta (create_appointment, cancel_appointment, etc) para executar a ação. NÃO finja que executou. Responda APENAS com JSON contendo a action correta."
+                })
+                continue
+
+        # If already executed an action and LLM tries another, block it
+        if action_executed and action != "reply":
+            result, _ = execute_action(action, params, barbershop_id)
+            reply = result or msg or "Concluído."
             db.save_message(thread_id, "assistant", reply)
             return {"reply": reply, "barbershop_id": barbershop_id}
 
+        result, created_id = execute_action(action, params, barbershop_id)
+
+        if action == "reply" or result is None or iteration == 2:
+            reply = msg or result or "Processado."
+            db.save_message(thread_id, "assistant", reply)
+            return {"reply": reply, "barbershop_id": barbershop_id}
+
+        action_executed = True
+
         if created_id:
             _last_appointment[thread_id] = created_id
+            a = db.get_appointment(barbershop_id, created_id)
+            history.append({
+                "role": "system",
+                "content": f"Appointment #{created_id} ({a['title']}) created for this client."
+            })
 
+        # Action succeeded — let the LLM craft a natural reply
         history.append({"role": "assistant", "content": raw})
-        history.append({"role": "user", "content": f"Action executed. Result: {result}. Now reply to the customer."})
-    return {"reply": reply, "barbershop_id": barbershop_id}
+        history.append({
+            "role": "user",
+            "content": f"Ação executada. Resultado:\n{result}\nAgora responda ao cliente em português natural. Use APENAS a ação reply."
+        })
+    return {"reply": "Desculpe, não consegui processar. Pode repetir?", "barbershop_id": barbershop_id}
 
 
 # ── Redirect root to login ──────────────────────────────────────

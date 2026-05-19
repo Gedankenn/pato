@@ -62,7 +62,7 @@ def init_db():
                 barbershop_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
                 duration_minutes INTEGER NOT NULL DEFAULT 60,
-                price_cents INTEGER NOT NULL DEFAULT 0,
+                price REAL NOT NULL DEFAULT 0.0,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (barbershop_id) REFERENCES barbershops(id)
@@ -76,6 +76,10 @@ def _migrate(conn):
     cols = [r["name"] for r in conn.execute("PRAGMA table_info(barbershops)").fetchall()]
     if "is_admin" not in cols:
         conn.execute("ALTER TABLE barbershops ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    svc_cols = [r["name"] for r in conn.execute("PRAGMA table_info(services)").fetchall()]
+    if "price_cents" in svc_cols and "price" not in svc_cols:
+        conn.execute("ALTER TABLE services ADD COLUMN price REAL NOT NULL DEFAULT 0.0")
+        conn.execute("UPDATE services SET price = price_cents / 100.0 WHERE price_cents > 0")
 
 
 def _ensure_admin(conn):
@@ -270,18 +274,18 @@ def list_services(barbershop_id: int, active_only: bool = True):
         return [dict(r) for r in rows]
 
 
-def create_service(barbershop_id: int, name: str, duration_minutes: int, price_cents: int):
+def create_service(barbershop_id: int, name: str, duration_minutes: int, price: float):
     now = datetime.utcnow().isoformat()
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO services (barbershop_id, name, duration_minutes, price_cents, created_at) VALUES (?, ?, ?, ?, ?)",
-            (barbershop_id, name, duration_minutes, price_cents, now),
+            "INSERT INTO services (barbershop_id, name, duration_minutes, price, created_at) VALUES (?, ?, ?, ?, ?)",
+            (barbershop_id, name, duration_minutes, price, now),
         )
         return cursor.lastrowid
 
 
 def update_service(service_id: int, barbershop_id: int, name: str | None = None,
-                   duration_minutes: int | None = None, price_cents: int | None = None,
+                   duration_minutes: int | None = None, price: float | None = None,
                    active: bool | None = None):
     parts = []
     vals = []
@@ -291,9 +295,9 @@ def update_service(service_id: int, barbershop_id: int, name: str | None = None,
     if duration_minutes is not None:
         parts.append("duration_minutes = ?")
         vals.append(duration_minutes)
-    if price_cents is not None:
-        parts.append("price_cents = ?")
-        vals.append(price_cents)
+    if price is not None:
+        parts.append("price = ?")
+        vals.append(price)
     if active is not None:
         parts.append("active = ?")
         vals.append(1 if active else 0)

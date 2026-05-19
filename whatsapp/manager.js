@@ -165,6 +165,21 @@ app.delete("/manager/stop/:id", (req, res) => {
   res.json({ status: "stopped" });
 });
 
+app.post("/manager/send", (req, res) => {
+  const { barbershop_id, to, text } = req.body;
+  if (!barbershop_id || !to || !text) return res.status(400).json({ error: "barbershop_id, to, and text required" });
+  const client = sessions.get(barbershop_id);
+  if (!client) return res.status(404).json({ error: "Session not started for this barbershop" });
+  const number = to.includes("@c.us") ? to : `${to}@c.us`;
+  client.sendMessage(number, text).then(() => {
+    console.log(`[${barbershop_id}] Proactive message sent to ${to}`);
+    res.json({ status: "sent", to });
+  }).catch((err) => {
+    console.error(`[${barbershop_id}] Send error:`, err.message);
+    res.status(500).json({ error: err.message });
+  });
+});
+
 // ── Start ───────────────────────────────────────────────────────
 
 app.listen(PORT, () => {

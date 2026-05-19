@@ -56,13 +56,13 @@ class LoginRequest(BaseModel):
 class ServiceCreate(BaseModel):
     name: str
     duration_minutes: int = 60
-    price_cents: int = 0
+    price: float = 0.0
 
 
 class ServiceUpdate(BaseModel):
     name: Optional[str] = None
     duration_minutes: Optional[int] = None
-    price_cents: Optional[int] = None
+    price: Optional[float] = None
     active: Optional[bool] = None
 
 
@@ -71,7 +71,7 @@ class ServiceResponse(BaseModel):
     barbershop_id: int
     name: str
     duration_minutes: int
-    price_cents: int
+    price: float
     active: bool
     created_at: str
 
