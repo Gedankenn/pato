@@ -1,11 +1,14 @@
 IMAGE = pato-backend
 CONTAINER = pato
+WA_IMAGE = pato-whatsapp
+WA_CONTAINER = pato-whatsapp
 DB_PATH = /data/pato.db
 DATA_VOLUME = /mnt/user/appdata/pato/data
+WA_VOLUME = /mnt/user/appdata/pato/wa-data
 SERVER = root@tower.local
 SERVER_DIR = /mnt/user/appdata/pato
 
-.PHONY: build restart deploy logs ssh sync
+.PHONY: build restart deploy logs ssh sync sync-wa wa-build wa-logs
 
 build:
 	docker build -t $(IMAGE) .
@@ -14,13 +17,32 @@ restart:
 	docker rm -f $(CONTAINER) 2>/dev/null; \
 	docker run -d --name $(CONTAINER) --network host --restart unless-stopped \
 		-e PATO_DB_PATH=$(DB_PATH) \
+		-e WHATSAPP_DATA_DIR=/wa-data \
 		-v $(DATA_VOLUME):/data \
+		-v $(WA_VOLUME):/wa-data \
 		$(IMAGE)
 
 deploy: build restart
 
 logs:
 	docker logs -f $(CONTAINER)
+
+wa-build:
+	cd whatsapp && docker build -t $(WA_IMAGE) .
+
+wa-restart:
+	docker rm -f $(WA_CONTAINER) 2>/dev/null; \
+	docker run -d --name $(WA_CONTAINER) --network host --restart unless-stopped \
+		-e MANAGER_PORT=8001 \
+		-e PATO_API_URL=http://localhost:8000 \
+		-e CHROMIUM_PATH=/usr/bin/chromium \
+		-v $(WA_VOLUME):/app/data \
+		$(WA_IMAGE)
+
+wa-deploy: wa-build wa-restart
+
+wa-logs:
+	docker logs -f $(WA_CONTAINER)
 
 ssh:
 	ssh $(SERVER)
@@ -40,4 +62,13 @@ sync:
 		--exclude='whatsapp/node_modules' \
 		--exclude='.opencode' \
 		/home/sabinho/github/pato/ $(SERVER):$(SERVER_DIR)
-	ssh $(SERVER) "cd $(SERVER_DIR) && docker build -t $(IMAGE) . && docker rm -f $(CONTAINER) 2>/dev/null && docker run -d --name $(CONTAINER) --network host --restart unless-stopped -e PATO_DB_PATH=$(DB_PATH) -v $(DATA_VOLUME):/data $(IMAGE)"
+	ssh $(SERVER) "cd $(SERVER_DIR) && docker build -t $(IMAGE) . && docker rm -f $(CONTAINER) 2>/dev/null && docker run -d --name $(CONTAINER) --network host --restart unless-stopped -e PATO_DB_PATH=$(DB_PATH) -e WHATSAPP_DATA_DIR=/wa-data -v $(DATA_VOLUME):/data -v $(WA_VOLUME):/wa-data $(IMAGE)"
+
+sync-wa:
+	rsync -avz --delete \
+		--exclude='node_modules' \
+		--exclude='sessions' \
+		--exclude='.wwebjs_cache' \
+		--exclude='public' \
+		/home/sabinho/github/pato/whatsapp/ $(SERVER):$(SERVER_DIR)/whatsapp/
+	ssh $(SERVER) "cd $(SERVER_DIR)/whatsapp && docker build -t $(WA_IMAGE) . && docker rm -f $(WA_CONTAINER) 2>/dev/null && docker run -d --name $(WA_CONTAINER) --network host --restart unless-stopped -e MANAGER_PORT=8001 -e PATO_API_URL=http://localhost:8000 -e CHROMIUM_PATH=/usr/bin/chromium -v $(WA_VOLUME):/app/data $(WA_IMAGE)"
