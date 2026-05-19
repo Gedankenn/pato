@@ -14,6 +14,10 @@ def get_connection():
     return conn
 
 
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@patoagenda.com")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+
+
 def init_db():
     with get_connection() as conn:
         conn.execute("""
@@ -23,6 +27,7 @@ def init_db():
                 email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
                 whatsapp_number TEXT,
+                is_admin INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
         """)
@@ -41,6 +46,29 @@ def init_db():
                 FOREIGN KEY (barbershop_id) REFERENCES barbershops(id)
             )
         """)
+        _migrate(conn)
+        _ensure_admin(conn)
+
+
+def _migrate(conn):
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(barbershops)").fetchall()]
+    if "is_admin" not in cols:
+        conn.execute("ALTER TABLE barbershops ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+
+
+def _ensure_admin(conn):
+    existing = conn.execute(
+        "SELECT id FROM barbershops WHERE email = ?", (ADMIN_EMAIL,)
+    ).fetchone()
+    if existing:
+        conn.execute("UPDATE barbershops SET is_admin = 1 WHERE id = ?", (existing["id"],))
+    else:
+        now = datetime.utcnow().isoformat()
+        password_hash = _bcrypt.hashpw(ADMIN_PASSWORD.encode(), _bcrypt.gensalt()).decode()
+        conn.execute(
+            "INSERT INTO barbershops (name, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, 1, ?)",
+            ("Administrador", ADMIN_EMAIL, password_hash, now),
+        )
 
 
 # ── Barbershops ──────────────────────────────────────────────
@@ -143,3 +171,38 @@ def cancel_appointment(barbershop_id, appointment_id):
             (now, appointment_id, barbershop_id),
         )
         return cursor.rowcount > 0
+
+
+# ── Admin ─────────────────────────────────────────────────────
+
+def list_all_barbershops():
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, email, whatsapp_number, is_admin, created_at FROM barbershops ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_all_appointments():
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT a.*, b.name AS barbershop_name
+            FROM appointments a
+            LEFT JOIN barbershops b ON a.barbershop_id = b.id
+            ORDER BY a.created_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_stats():
+    with get_connection() as conn:
+        shops = conn.execute("SELECT COUNT(*) AS c FROM barbershops").fetchone()["c"]
+        appointments = conn.execute("SELECT COUNT(*) AS c FROM appointments").fetchone()["c"]
+        scheduled = conn.execute("SELECT COUNT(*) AS c FROM appointments WHERE status = 'scheduled'").fetchone()["c"]
+        cancelled = conn.execute("SELECT COUNT(*) AS c FROM appointments WHERE status = 'cancelled'").fetchone()["c"]
+        return {
+            "barbershops": shops,
+            "appointments": appointments,
+            "scheduled": scheduled,
+            "cancelled": cancelled,
+        }

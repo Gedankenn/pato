@@ -23,7 +23,7 @@ from app.schemas import (
 )
 from app import database as db
 from app.llm import SYSTEM_PROMPT
-from app.auth import create_token, get_current_barbershop_id, get_barbershop_id_from_request
+from app.auth import create_token, get_current_barbershop_id, get_barbershop_id_from_request, require_admin
 
 app = FastAPI(title="PatoAgenda AI — Agendamentos Inteligentes")
 
@@ -162,6 +162,7 @@ def login(body: LoginRequest):
         "name": shop["name"],
         "email": shop["email"],
         "whatsapp_number": shop.get("whatsapp_number"),
+        "is_admin": shop.get("is_admin", 0),
     })
     resp.set_cookie(key="token", value=token, httponly=False, max_age=2592000, path="/")
     return resp
@@ -364,7 +365,7 @@ img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 .logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
 </style></head>
 <body>
-<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1><p>{shop['name']} <a href="/logout" class="logout">sair</a></p></div>
+<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1><p>{shop['name']}{' · <a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''} <a href="/logout" class="logout">sair</a></p></div>
 <div class="container">
 <div class="card"><h2>🤖 WhatsApp</h2><span class="badge b-{wa_status}">{wa_status}</span></div>
 {qr_block}
@@ -373,6 +374,104 @@ img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 </div></div>
 <div class="ftr">PatoAgenda AI v1.0 — Agendamentos Inteligentes — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 <script>setTimeout(()=>location.reload(),15000)</script>
+</body></html>""")
+
+
+# ── Admin API ────────────────────────────────────────────────────
+
+@app.get("/admin/barbershops")
+def admin_list_barbershops(_=Depends(require_admin)):
+    return db.list_all_barbershops()
+
+
+@app.get("/admin/appointments")
+def admin_list_appointments(_=Depends(require_admin)):
+    return db.list_all_appointments()
+
+
+@app.get("/admin/stats")
+def admin_stats(_=Depends(require_admin)):
+    return db.get_stats()
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_dashboard(request: Request):
+    token = request.cookies.get("token")
+    if not token:
+        return RedirectResponse(url="/login")
+    try:
+        from app.auth import SECRET, ALGO
+        import jwt
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        if not payload.get("is_admin"):
+            return RedirectResponse(url="/dashboard")
+    except Exception:
+        return RedirectResponse(url="/login")
+
+    shops = db.list_all_barbershops()
+    apps = db.list_all_appointments()
+    stats = db.get_stats()
+
+    shop_rows = "".join(
+        f"<tr><td>#{s['id']}</td><td>{s['name']}</td><td>{s['email']}</td>"
+        f"<td>{s['whatsapp_number'] or '-'}</td>"
+        f"<td>{'<span class=\"badge b-admin\">Admin</span>' if s['is_admin'] else '<span class=\"badge b-shop\">Loja</span>'}</td>"
+        f"<td>{s['created_at'][:10]}</td></tr>"
+        for s in shops
+    )
+
+    app_rows = "".join(
+        f"<tr><td>#{a['id']}</td><td>{a.get('barbershop_name','?')}</td>"
+        f"<td>{a['title']}</td><td>{a['start_time']}</td>"
+        f"<td>{a['end_time']}</td>"
+        f"<td class='s-{a['status']}'>{a['status']}</td></tr>"
+        for a in apps
+    )
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Painel Admin - PatoAgenda AI</title><link rel="icon" type="image/png" href="/static/logo.png">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,sans-serif;background:#1a1a2e;color:#e0e0e0}}
+.header{{background:#16213e;color:#fff;padding:20px;text-align:center;border-bottom:3px solid #0f3460}}
+.header h1{{font-size:24px}}
+.stats{{display:flex;gap:16px;max-width:900px;margin:20px auto;padding:0 16px}}
+.stat-card{{flex:1;background:#16213e;border-radius:12px;padding:20px;text-align:center;border:1px solid #0f3460}}
+.stat-card .n{{font-size:32px;font-weight:700;color:#e94560}}
+.stat-card .l{{font-size:13px;color:#888;margin-top:4px}}
+.container{{max-width:1000px;margin:0 auto;padding:0 16px 20px}}
+.card{{background:#16213e;border-radius:12px;padding:20px;margin-bottom:16px;border:1px solid #0f3460}}
+.card h2{{margin-bottom:12px;font-size:18px;color:#e94560}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th,td{{padding:8px 6px;text-align:left;border-bottom:1px solid #0f3460}}
+th{{color:#888;font-weight:600}}
+.badge{{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}}
+.b-admin{{background:#e94560;color:#fff}}
+.b-shop{{background:#0f3460;color:#aaa}}
+.s-scheduled{{color:#4ecca3}}
+.s-rescheduled{{color:#ffc857}}
+.s-cancelled{{color:#e94560;text-decoration:line-through}}
+.ftr{{text-align:center;padding:20px;color:#555;font-size:13px}}
+.logout{{float:right;color:#e94560;text-decoration:none;font-size:14px}}
+</style></head>
+<body>
+<div class="header"><h1>🛡️ Painel Admin <a href="/logout" class="logout">sair</a></h1></div>
+<div class="stats">
+<div class="stat-card"><div class="n">{stats['barbershops']}</div><div class="l">Empresas</div></div>
+<div class="stat-card"><div class="n">{stats['appointments']}</div><div class="l">Agendamentos</div></div>
+<div class="stat-card"><div class="n">{stats['scheduled']}</div><div class="l">Ativos</div></div>
+<div class="stat-card"><div class="n">{stats['cancelled']}</div><div class="l">Cancelados</div></div>
+</div>
+<div class="container">
+<div class="card"><h2>🏢 Empresas</h2>
+{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>Criado</th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
+</div>
+<div class="card"><h2>📋 Todos Agendamentos</h2>
+{"<table><thead><tr><th>#</th><th>Empresa</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if apps else '<p style="color:#888">Nenhum agendamento</p>'}
+</div>
+</div>
+<div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#555;text-decoration:none">fabiostella@gmail.com</a></div>
 </body></html>""")
 
 
@@ -424,7 +523,7 @@ try{
 const res=await fetch('/auth/'+t,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(form)});
 const data=await res.json();
 if(!res.ok){document.getElementById(t+'Error').textContent=data.detail||'Erro';document.getElementById(t+'Error').style.display='block';return}
-localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href='/dashboard'
+localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href=data.is_admin?'/admin':'/dashboard'
 }catch(e){document.getElementById(t+'Error').textContent='Erro de conexão com o servidor';document.getElementById(t+'Error').style.display='block'}}
 if(localStorage.getItem('token')){window.location.href='/dashboard'}
 </script>

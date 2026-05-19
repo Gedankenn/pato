@@ -3,13 +3,17 @@ import jwt
 from datetime import datetime, timedelta
 from fastapi import Header, HTTPException, Request
 
+from app import database as db
+
 SECRET = os.environ.get("JWT_SECRET", "pato-dev-secret-change-in-production")
 ALGO = "HS256"
 
 
 def create_token(barbershop_id: int) -> str:
+    shop = db.get_barbershop(barbershop_id)
     payload = {
         "barbershop_id": barbershop_id,
+        "is_admin": shop.get("is_admin", 0) if shop else 0,
         "exp": datetime.utcnow() + timedelta(days=30),
     }
     return jwt.encode(payload, SECRET, algorithm=ALGO)
@@ -23,6 +27,23 @@ def get_current_barbershop_id(authorization: str = Header(None)) -> int:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        return payload["barbershop_id"]
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def require_admin(authorization: str = Header(None)) -> int:
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, SECRET, algorithms=[ALGO])
+        if not payload.get("is_admin"):
+            raise HTTPException(status_code=403, detail="Admin only")
         return payload["barbershop_id"]
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
