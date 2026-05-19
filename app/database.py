@@ -85,6 +85,9 @@ def _migrate(conn):
         conn.execute("ALTER TABLE appointments ADD COLUMN customer_phone TEXT DEFAULT ''")
     if "reminder_sent" not in app_cols:
         conn.execute("ALTER TABLE appointments ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0")
+    shop_cols = [r["name"] for r in conn.execute("PRAGMA table_info(barbershops)").fetchall()]
+    if "business_type" not in shop_cols:
+        conn.execute("ALTER TABLE barbershops ADD COLUMN business_type TEXT NOT NULL DEFAULT 'barbearia'")
 
 
 def _ensure_admin(conn):
@@ -104,14 +107,14 @@ def _ensure_admin(conn):
 
 # ── Barbershops ──────────────────────────────────────────────
 
-def create_barbershop(name: str, email: str, password: str) -> dict | None:
+def create_barbershop(name: str, email: str, password: str, business_type: str = "barbearia") -> dict | None:
     now = datetime.utcnow().isoformat()
     password_hash = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
     try:
         with get_connection() as conn:
             cursor = conn.execute(
-                "INSERT INTO barbershops (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
-                (name, email, password_hash, now),
+                "INSERT INTO barbershops (name, email, password_hash, business_type, created_at) VALUES (?, ?, ?, ?, ?)",
+                (name, email, password_hash, business_type, now),
             )
             row = conn.execute("SELECT * FROM barbershops WHERE id = ?", (cursor.lastrowid,)).fetchone()
             return dict(row) if row else None
@@ -144,6 +147,23 @@ def set_whatsapp_number(barbershop_id: int, number: str):
             "UPDATE barbershops SET whatsapp_number = ? WHERE id = ?",
             (number, barbershop_id),
         )
+
+
+def update_barbershop(barbershop_id: int, name: str | None = None, business_type: str | None = None):
+    parts = []
+    vals = []
+    if name is not None:
+        parts.append("name = ?")
+        vals.append(name)
+    if business_type is not None:
+        parts.append("business_type = ?")
+        vals.append(business_type)
+    if not parts:
+        return False
+    vals.append(barbershop_id)
+    with get_connection() as conn:
+        cur = conn.execute(f"UPDATE barbershops SET {', '.join(parts)} WHERE id = ?", vals)
+        return cur.rowcount > 0
 
 
 # ── Appointments (scoped by barbershop) ─────────────────────

@@ -25,8 +25,9 @@ from app.schemas import (
     ServiceUpdate,
     ServiceResponse,
 )
+from pydantic import BaseModel
 from app import database as db
-from app.llm import SYSTEM_PROMPT
+from app.llm import build_system_prompt
 from app.auth import create_token, get_current_barbershop_id, get_barbershop_id_from_request, require_admin
 
 app = FastAPI(title="PatoAgenda AI — Agendamentos Inteligentes")
@@ -260,7 +261,7 @@ def login(body: LoginRequest):
 
 @app.post("/auth/register")
 def register(body: RegisterRequest):
-    shop = db.create_barbershop(body.name, body.email, body.password)
+    shop = db.create_barbershop(body.name, body.email, body.password, business_type=body.business_type)
     if not shop:
         raise HTTPException(status_code=409, detail="Email already registered")
     token = create_token(shop["id"])
@@ -336,14 +337,16 @@ def _resolve_dates(text: str) -> str:
 
 
 def _build_prompt(barbershop_id: int, thread_id: str | None = None) -> str:
+    shop = db.get_barbershop(barbershop_id)
+    biz_type = shop.get("business_type", "barbearia") if shop else "barbearia"
+    base = build_system_prompt(biz_type)
     services = db.list_services(barbershop_id)
-    base = SYSTEM_PROMPT
     if services:
         lines = "\n".join(
             f"  - {s['name']}: R$ {s['price']:.2f} ({s['duration_minutes']}min)"
             for s in services
         )
-        base += f"\n\nSERVIÇOS DA BARBEARIA:\n{lines}\n\nUse esta lista para informar preços e durações quando o cliente perguntar."
+        base += f"\n\nSERVIÇOS OFERECIDOS:\n{lines}\n\nUse esta lista para informar preços e durações quando o cliente perguntar."
     if thread_id and thread_id in _last_appointment:
         a = db.get_appointment(barbershop_id, _last_appointment[thread_id])
         if a and a["status"] == "scheduled":
@@ -868,6 +871,29 @@ def config_page(request: Request):
         for s in services
     )
 
+    bt = shop.get("business_type", "barbearia")
+    bt_options = "".join(f'<option value="{k}"{" selected" if k == bt else ""}>{v}</option>' for k, v in {
+        "barbearia": "Barbearia",
+        "salão": "Salão de Beleza",
+        "cabeleireiro": "Cabeleireiro",
+        "manicure": "Manicure",
+        "pedicure": "Pedicure",
+        "massagista": "Massagista",
+        "spa": "SPA",
+        "tatuador": "Tatuador",
+        "esteticista": "Esteticista",
+        "depilação": "Depilação",
+        "maquiador": "Maquiador",
+        "personal": "Personal Trainer",
+        "fisioterapeuta": "Fisioterapeuta",
+        "petshop": "Petshop / Estética Animal",
+        "nutricionista": "Nutricionista",
+        "psicólogo": "Psicólogo",
+        "podólogo": "Podólogo",
+        "consultório": "Consultório",
+        "outro": "Outro",
+    }.items())
+
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="pt-BR">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -913,6 +939,8 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
   <a href="/dashboard">📋 Agenda</a>
   &nbsp;·&nbsp;
   <a href="/config" style="font-weight:700">⚙️ Config</a>
+  &nbsp;·&nbsp;
+  <a href="/reports">📊 Relatórios</a>
   <a href="/logout" class="logout">sair</a>
 </p></div>
 <div class="container">
@@ -938,6 +966,17 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
 <div class="card">
   <h2>💡 Dica</h2>
   <p>Os serviços cadastrados aqui são enviados automaticamente para a IA. Quando um cliente perguntar "quanto custa?" ou "qual o valor?", a IA consulta esta lista para responder com os preços corretos.</p>
+</div>
+
+<div class="card">
+  <h2>🏪 Tipo de Negócio</h2>
+  <p style="font-size:14px;color:#666;margin-bottom:8px">Isso ajuda a IA a se comportar de acordo com o seu negócio.</p>
+  <div class="form-row">
+    <div class="field" style="flex:3"><label>Tipo</label>
+      <select id="bizType">{bt_options}</select>
+    </div>
+    <div class="field" style="flex:0"><button class="btn btn-primary" onclick="saveBizType()">Salvar</button></div>
+  </div>
 </div>
 
 <div class="card">
@@ -1000,6 +1039,14 @@ async function delSvc(id) {{
     await api('DELETE', '/services/' + id);
     document.getElementById('svc-'+id).remove();
     msg('Serviço excluído!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+
+async function saveBizType() {{
+  const val = document.getElementById('bizType').value;
+  try {{
+    await api('PUT', '/barbershop', {{business_type: val}});
+    msg('Tipo de negócio salvo!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
 </script>
@@ -1304,7 +1351,21 @@ def me(barbershop_id: int = Depends(get_current_barbershop_id)):
     shop = db.get_barbershop(barbershop_id)
     if not shop:
         raise HTTPException(status_code=404)
-    return {"id": shop["id"], "name": shop["name"], "email": shop["email"], "whatsapp_number": shop.get("whatsapp_number")}
+    return {"id": shop["id"], "name": shop["name"], "email": shop["email"], "whatsapp_number": shop.get("whatsapp_number"), "business_type": shop.get("business_type", "barbearia")}
+
+
+class BarbershopUpdate(BaseModel):
+    name: str | None = None
+    business_type: str | None = None
+
+
+@app.put("/barbershop")
+def update_barbershop(body: BarbershopUpdate, barbershop_id: int = Depends(get_current_barbershop_id)):
+    ok = db.update_barbershop(barbershop_id, name=body.name, business_type=body.business_type)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    shop = db.get_barbershop(barbershop_id)
+    return {"id": shop["id"], "name": shop["name"], "business_type": shop.get("business_type", "barbearia")}
 
 
 # ── Webhook (WhatsApp Manager → Backend) ───────────────────────
@@ -1401,7 +1462,7 @@ DEMO_EMAIL = "demo@patobarba.com"
 def demo_login():
     shop = db.verify_password(DEMO_EMAIL, "patobarba123")
     if not shop:
-        shop = db.create_barbershop("PatoBarba", DEMO_EMAIL, "patobarba123")
+        shop = db.create_barbershop("PatoBarba", DEMO_EMAIL, "patobarba123", business_type="barbearia")
         if not shop:
             raise HTTPException(status_code=500, detail="Failed to create demo")
         for name, dur, price in [

@@ -44,6 +44,7 @@ class RegisterRequest(BaseModel):
     name: str
     email: str
     password: str
+    business_type: str = "barbearia"
 
 
 class LoginRequest(BaseModel):

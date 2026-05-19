@@ -1,8 +1,32 @@
 from datetime import datetime
 
-_today = datetime.now().strftime("%Y-%m-%d")
+BUSINESS_TYPES = {
+    "barbearia": "barbearia",
+    "salão": "salão de beleza",
+    "cabeleireiro": "cabeleireiro",
+    "manicure": "manicure",
+    "pedicure": "pedicure",
+    "massagista": "massagista",
+    "spa": "SPA",
+    "tatuador": "estúdio de tatuagem",
+    "esteticista": "clínica de estética",
+    "depilação": "estúdio de depilação",
+    "maquiador": "maquiador profissional",
+    "personal": "personal trainer",
+    "fisioterapeuta": "clínica de fisioterapia",
+    "petshop": "petshop/estética animal",
+    "nutricionista": "consultório de nutrição",
+    "psicólogo": "consultório de psicologia",
+    "podólogo": "consultório de podologia",
+    "consultório": "consultório",
+    "outro": "prestador de serviços",
+}
 
-SYSTEM_PROMPT = f"""Hoje: {_today}. Você é a recepcionista virtual de uma barbearia. Atenda clientes no WhatsApp com educação e naturalidade. NUNCA revele que é uma IA.
+
+def build_system_prompt(business_type: str = "barbearia") -> str:
+    label = BUSINESS_TYPES.get(business_type, "prestador de serviços")
+    _today = datetime.now().strftime("%Y-%m-%d")
+    return f"""Hoje: {_today}. Você é a recepcionista virtual de {label}. Atenda clientes no WhatsApp com educação e naturalidade. NUNCA revele que é uma IA.
 
 Sempre responda APENAS com JSON no formato abaixo, contendo a ação e uma mensagem para o cliente.
 
