@@ -66,8 +66,9 @@ def startup():
 
 
 def format_appointment(a: dict) -> str:
+    name = f" ({a['description']})" if a.get('description') else ""
     return (
-        f"[#{a['id']}] {a['title']} - {a['start_time']} to {a['end_time']} "
+        f"[#{a['id']}] {a['title']}{name} - {a['start_time']} to {a['end_time']} "
         f"({a['status']})"
     )
 
@@ -555,7 +556,7 @@ def admin_whatsapp_qrcode(barbershop_id: int, _=Depends(require_admin)):
 # ── Dashboard (scoped) ──────────────────────────────────────────
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, week: str = Query(None)):
     barbershop_id = get_barbershop_id_from_request(request)
     if not barbershop_id:
         return RedirectResponse(url="/login")
@@ -567,63 +568,187 @@ def dashboard(request: Request):
     if os.path.exists(status_path):
         wa_status = json.load(open(status_path)).get("status", "inactive")
 
-    app_rows = "".join(
-        f"<tr><td>#{a['id']}</td><td>{a['title']}</td><td>{a['start_time']}</td><td>{a['end_time']}</td><td class='s-{a['status']}'>{a['status']}</td></tr>"
-        for a in appointments
-    )
+    app_json = json.dumps(appointments)
 
-    qr_block = ""
-    if wa_status == "awaiting_scan":
-        qr_block = f"""<div class="card"><h2>📱 Conectar WhatsApp</h2><p>Escaneie o QR code com o WhatsApp da empresa:</p><p class="hint">WhatsApp > ⋮ > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
+    today = datetime.utcnow()
+    if week:
+        mon = datetime.strptime(week, "%Y-%m-%d")
+    else:
+        mon = today - timedelta(days=today.weekday())
+    week_param = mon.strftime("%Y-%m-%d")
+    next_week = (mon + timedelta(days=7)).strftime("%Y-%m-%d")
+    prev_week = (mon - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    return HTMLResponse(f"""<!DOCTYPE html>
+    DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"]
+
+    CAL_HTML = """
+<!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>PatoAgenda AI - {shop['name']}</title><link rel="icon" type="image/png" href="/static/logo.png">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>PatoAgenda AI - SHOP_NAME</title><link rel="icon" type="image/png" href="/static/logo.png">
 <style>
-*{{margin:0;padding:0;box-sizing:border-box}}
-body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
-.header{{background:#1a73e8;color:#fff;padding:20px;text-align:center}}
-.header .logo{{width:100px;height:100px;border-radius:50%;object-fit:cover;background:#fff;padding:6px;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
-.header h1{{font-size:24px;margin-top:4px}}
-.container{{max-width:900px;margin:20px auto;padding:0 16px}}
-.card{{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
-.card h2{{margin-bottom:12px;font-size:18px}}
-.badge{{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:600}}
-.b-connected{{background:#e6f4ea;color:#1e7e34}}
-.b-awaiting_scan{{background:#fef7e0;color:#e37400}}
-.b-inactive,.b-unknown{{background:#f1f3f4;color:#5f6368}}
-.b-disconnected{{background:#fce8e6;color:#c5221f}}
-.hint{{color:#666;font-size:13px;margin:8px 0}}
-table{{width:100%;border-collapse:collapse}}
-th,td{{padding:10px 8px;text-align:left;border-bottom:1px solid #eee;font-size:14px}}
-th{{color:#666;font-weight:600}}
-.s-scheduled{{color:#1e7e34}}
-.s-rescheduled{{color:#e37400}}
-.s-cancelled{{color:#c5221f;text-decoration:line-through}}
-img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
-
-.empty{{text-align:center;color:#999;padding:30px}}
-.ftr{{text-align:center;padding:20px;color:#999;font-size:13px}}
-.logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}
+.header{background:#1a73e8;color:#fff;padding:16px 20px;text-align:center}
+.header .logo{width:60px;height:60px;border-radius:50%;object-fit:cover;background:#fff;padding:4px;margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.header h1{font-size:20px}
+.container{max-width:1100px;margin:16px auto;padding:0 12px}
+.card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.card h2{margin-bottom:8px;font-size:16px}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600}
+.b-connected{background:#e6f4ea;color:#1e7e34}
+.b-awaiting_scan{background:#fef7e0;color:#e37400}
+.b-inactive,.b-unknown{background:#f1f3f4;color:#5f6368}
+.b-disconnected{background:#fce8e6;color:#c5221f}
+.hint{color:#666;font-size:13px;margin:8px 0}
+img.qr{display:block;margin:12px auto;width:220px;image-rendering:pixelated}
+.ftr{text-align:center;padding:16px;color:#999;font-size:12px}
+.logout{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}
+.nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap}
+.nav h2{font-size:16px}
+.nav .btns{display:flex;gap:4px}
+.nav button,.nav a{padding:6px 14px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;text-decoration:none;color:#333}
+.nav button:hover,.nav a:hover{background:#f0f0f0}
+.cal{display:grid;grid-template-columns:50px repeat(7,1fr);font-size:12px;overflow-x:auto}
+.cal .ch{background:#f9f9f9;font-weight:600;text-align:center;padding:6px 2px;border-bottom:2px solid #ddd;position:sticky;top:0;z-index:2;font-size:11px}
+.cal .ch.today{background:#1a73e8;color:#fff;border-radius:6px 6px 0 0}
+.cal .tm{text-align:right;padding:4px 6px;color:#999;font-size:10px;border-top:1px solid #f0f0f0;height:48px}
+.cal .sl{border-left:1px solid #eee;border-top:1px solid #f0f0f0;position:relative;min-height:48px;padding:2px}
+.cal .sl.today{background:#f0f6ff}
+.cal .sl.hl{background:#fafafa}
+.appt{position:absolute;left:2px;right:2px;border-radius:4px;padding:3px 5px;font-size:11px;cursor:pointer;overflow:hidden;z-index:1;color:#fff;min-height:20px;border:1px solid rgba(0,0,0,.1)}
+.appt:hover{opacity:.9;z-index:3}
+.appt .n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.appt .d{font-size:10px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:#fff;border-radius:12px;padding:24px;width:90%;max-width:380px;box-shadow:0 4px 20px rgba(0,0,0,.2)}
+.modal h3{margin-bottom:8px}
+.modal p{margin:4px 0;font-size:14px;color:#555}
+.modal .btns{display:flex;gap:8px;margin-top:16px}
+.modal .btns button{flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+.modal .btns .ccl{background:#c5221f;color:#fff}
+.modal .btns .ok{background:#1a73e8;color:#fff}
+.modal .close{background:#f1f3f4;color:#333}
+.empty{text-align:center;color:#999;padding:40px;grid-column:1/9}
 </style></head>
 <body>
-<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1>
+<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>SHOP_NAME</h1>
 <p>
-  <a href="/dashboard" style="color:#fff;text-decoration:none;font-weight:700">📋 Agenda</a>
-  &nbsp;·&nbsp;
-  <a href="/config" style="color:#fff;text-decoration:none">⚙️ Config</a>
-  {' · <a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''}
+  <a href="/dashboard" style="color:#fff;text-decoration:none;font-weight:700"> Agenda</a>
+  &nbsp;.&nbsp;
+  <a href="/config" style="color:#fff;text-decoration:none"> Config</a>
+  ADMIN_LINK
   <a href="/logout" class="logout">sair</a>
 </p></div>
 <div class="container">
-<div class="card"><h2>🤖 WhatsApp</h2><span class="badge b-{wa_status}">{wa_status}</span></div>
-{qr_block}
-<div class="card"><h2>📋 Agendamentos</h2>
-{"<table><thead><tr><th>#</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if appointments else '<p class="empty">Nenhum agendamento</p>'}
+<div class="card"><h2> WhatsApp</h2><span class="badge b-WA_STATUS">WA_STATUS</span></div>
+QR_BLOCK
+<div class="card"><h2> Agenda Semanal</h2>
+<div id="cal"></div>
 </div></div>
-<div class="ftr">PatoAgenda AI v1.0 — Agendamentos Inteligentes — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
-<script>setTimeout(()=>location.reload(),15000)</script>
-</body></html>""")
+<div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
+<div class="modal-overlay" id="modal"><div class="modal" id="modalBody"></div></div>
+<script>
+const APPOINTMENTS = APP_JSON;
+const DAYS = DAYS_JSON;
+const COLORS = ["#1a73e8","#e37400","#1e7e34","#9334e6","#c5221f","#0d7377","#e67e22","#2ecc71","#e74c3c","#3498db","#9b59b6","#f39c12","#1abc9c","#d35400","#2980b9","#8e44ad","#27ae60","#c0392b","#16a085","#f1c40f"];
+const HOURS = [];
+for(let h=8;h<=20;h++){HOURS.push(('0'+h).slice(-2)+':00')}
+function getMon(d){d=new Date(d);var day=d.getDay();d.setDate(d.getDate()-(day===0?6:day-1));return d}
+function fmtDate(d){var m=d.getMonth()+1;return d.getFullYear()+'-'+('0'+m).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
+function fmtBr(d){return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)}
+function render(weekStart){
+var mon=getMon(weekStart),weekDays=[];
+for(var i=0;i<7;i++){var d=new Date(mon);d.setDate(mon.getDate()+i);weekDays.push(d)}
+var today=fmtDate(new Date());
+var html='<div class="nav"><div class="btns"><a href="?week=WEEK_PARAM"> Hoje</a></div><h2>'+fmtBr(weekDays[0])+' - '+fmtBr(weekDays[6])+'</h2><div class="btns">';
+var prev="PREV_WEEK";var next="NEXT_WEEK";
+html+='<a href="?week='+prev+'"> Anterior</a>';
+html+='<a href="?week='+next+'"> Proximo</a></div></div>';
+html+='<div class="cal"><div class="ch"></div>';
+for(var i=0;i<7;i++){var f=fmtDate(weekDays[i]);html+='<div class="ch'+(f===today?' today':'')+'">'+DAYS[weekDays[i].getDay()]+'<br>'+weekDays[i].getDate()+'</div>'}
+for(var h=0;h<HOURS.length;h++){
+html+='<div class="tm">'+HOURS[h]+'</div>';
+for(var d=0;d<7;d++){var f=fmtDate(weekDays[d]);html+='<div class="sl'+(f===today?' today':'')+(h%2===1?' hl':'')+'" id="s-'+f+'-'+h+'"></div>'}
+}
+var slots={};
+APPOINTMENTS.forEach(function(a){
+if(a.status!=='scheduled')return;
+var s=new Date(a.start_time),e=new Date(a.end_time);
+var dayIdx=weekDays.findIndex(function(wd){return fmtDate(wd)===fmtDate(s)});
+if(dayIdx<0)return;
+var sm=s.getHours()*60+s.getMinutes(),em=e.getHours()*60+e.getMinutes();
+var sh=Math.floor(sm/60)-8,eh=Math.ceil(em/60)-8;
+if(sh<0)sh=0;if(eh>HOURS.length)eh=HOURS.length;
+var sid=fmtDate(s)+'-'+sh;
+if(!slots[sid])slots[sid]=[];
+var topPct=((sm%60)/60)*100;
+var heightPx=(em-sm)/60*48;
+if(heightPx<24)heightPx=24;
+slots[sid].push({a:a,top:topPct,height:heightPx})
+});
+for(var key in slots){
+var items=slots[key];
+items.sort(function(x,y){return x.a.start_time<y.a.start_time?-1:1});
+items.forEach(function(item,i){
+var el=document.getElementById('s-'+key);
+if(!el)return;
+var c=COLORS[item.a.id%COLORS.length];
+var n=item.a.description||'';
+var d=document.createElement('div');d.className='appt';
+d.style.cssText='background:'+c+';height:'+item.height+'px;top:'+item.top+'%';
+var startStr=item.a.start_time.slice(11,16);
+d.innerHTML='<div class="n">'+item.a.title+'</div>'+(n?'<div class="d">'+n+'</div>':'')+'<div class="d">'+startStr+'</div>';
+d.onclick=function(){showModal(item.a)};
+el.appendChild(d)
+})
+}
+document.getElementById('cal').innerHTML=html;
+}
+function showModal(a){
+var h='<h3>'+a.title+'</h3>';
+if(a.description)h+='<p><b>Cliente:</b> '+a.description+'</p>';
+h+='<p><b>Inicio:</b> '+a.start_time.slice(0,16).replace('T',' ')+'</p>';
+h+='<p><b>Fim:</b> '+a.end_time.slice(0,16).replace('T',' ')+'</p>';
+h+='<p><b>Status:</b> '+a.status+'</p>';
+h+='<div class="btns">';
+if(a.status==='scheduled'){h+='<button class="ccl" onclick="cancelAppt('+a.id+')">Cancelar</button>'}
+h+='<button class="close" onclick="closeModal()">Fechar</button></div>';
+document.getElementById('modalBody').innerHTML=h;
+document.getElementById('modal').classList.add('show')
+}
+function closeModal(){document.getElementById('modal').classList.remove('show')}
+async function cancelAppt(id){
+if(!confirm('Cancelar este agendamento?'))return;
+try{
+var res=await fetch('/appointments/'+id,{method:'DELETE',headers:{'Authorization':'Bearer '+localStorage.getItem('token')}});
+if(res.ok){closeModal();location.reload()}
+else{alert('Erro ao cancelar')}
+}catch(e){alert('Erro de conexao')}
+}
+document.getElementById('modal').onclick=function(e){if(e.target===this)closeModal()};
+render('WEEK_PARAM');
+</script>
+</body></html>"""
+
+    shop_name = shop['name']
+    admin_link = f'&nbsp;.&nbsp;<a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''
+    qr_block2 = ""
+    if wa_status == "awaiting_scan":
+        qr_block2 = """<div class="card"><h2> Conectar WhatsApp</h2><p>Escaneie o QR code com o WhatsApp da empresa:</p><p class="hint">WhatsApp > ... > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
+
+    return HTMLResponse(
+        CAL_HTML
+        .replace("SHOP_NAME", shop_name)
+        .replace("ADMIN_LINK", admin_link)
+        .replace("WA_STATUS", wa_status)
+        .replace("QR_BLOCK", qr_block2)
+        .replace("APP_JSON", app_json)
+        .replace("DAYS_JSON", json.dumps(DAYS))
+        .replace("WEEK_PARAM", week_param)
+        .replace("PREV_WEEK", prev_week)
+        .replace("NEXT_WEEK", next_week)
+    )
 
 
 # ── Config Page ────────────────────────────────────────────────
