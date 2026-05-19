@@ -16,7 +16,8 @@ ACTIONS:
 - reply: no params — use to chat or ask
 
 RULES:
-- "amanhã" = today+1. "15h" = 15:00.
+- Dates are already in ISO format (YYYY-MM-DD), times in HH:MM. Use as-is.
+- Duration default 1h if not specified.
 - If user says "confirma" or "pode confirmar" → list_appointments
 - NEVER cancel unless user says "cancelar" or "cancela"
 - ALWAYS include a title (service name) when creating appointments. If user didn't specify, ask "Qual serviço você quer?"

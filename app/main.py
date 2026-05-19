@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -160,6 +160,7 @@ def call_llm(messages: list) -> str:
         model=LLM_MODEL,
         messages=messages,
         temperature=0.1,
+        max_tokens=512,
     )
     return response.choices[0].message.content or ""
 
@@ -228,6 +229,62 @@ def _extract_name(text: str) -> str | None:
     return name
 
 
+_WEEKDAYS = {"segunda": 0, "terça": 1, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4, "sábado": 5, "sabado": 5, "domingo": 6}
+
+
+def _resolve_dates(text: str) -> str:
+    today = datetime.now()
+    result = text
+
+    # Replace relative day references
+    def _next_weekday(target_wd: int) -> str:
+        days_ahead = target_wd - today.weekday()
+        if days_ahead <= 0:
+            days_ahead += 7
+        return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    def _this_weekday(target_wd: int) -> str:
+        days_ahead = target_wd - today.weekday()
+        if days_ahead < 0:
+            days_ahead += 7
+        return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+    # hoje
+    result = re.sub(r'\bhoje\b', today.strftime("%Y-%m-%d"), result, flags=re.IGNORECASE)
+    # amanhã
+    result = re.sub(r'\bamanh[ãa]\b', (today + timedelta(days=1)).strftime("%Y-%m-%d"), result, flags=re.IGNORECASE)
+    # depois de amanhã
+    result = re.sub(r'\bdepois de amanh[ãa]\b', (today + timedelta(days=2)).strftime("%Y-%m-%d"), result, flags=re.IGNORECASE)
+
+    # "próxima [weekday]" → next week
+    for name, wd in _WEEKDAYS.items():
+        result = re.sub(
+            rf'\bpr[oó]xim[ao]\s+{name}\b',
+            (today + timedelta(days=(7 + wd - today.weekday()) % 7 or 7)).strftime("%Y-%m-%d"),
+            result, flags=re.IGNORECASE,
+        )
+
+    # "esta [weekday]", "[weekday]" (alone) → this/next occurrence
+    for name, wd in _WEEKDAYS.items():
+        # "esta [weekday]"
+        result = re.sub(
+            rf'\besta\s+{name}\b',
+            _this_weekday(wd),
+            result, flags=re.IGNORECASE,
+        )
+        # standalone weekday with word boundaries, not preceded by "próxima" or "esta"
+        result = re.sub(
+            rf'(?<!pr[oó]xim[ao]\s)(?<!esta\s)\b{name}\b(?!-feira)',
+            _this_weekday(wd),
+            result, flags=re.IGNORECASE,
+        )
+
+    # Time patterns: "15h", "15:00", "15 horas" → keep as "15:00"
+    result = re.sub(r'\b(\d{1,2})h(?:\s*(\d{2}))?\b', lambda m: f"{int(m.group(1)):02d}:{m.group(2) or '00'}", result)
+
+    return result
+
+
 def _build_prompt(barbershop_id: int) -> str:
     services = db.list_services(barbershop_id)
     if services:
@@ -263,7 +320,8 @@ def chat(
         }))
         return MessageResponse(reply=reply, thread_id=thread_id)
 
-    db.save_message(thread_id, "user", request.message)
+    resolved = _resolve_dates(request.message)
+    db.save_message(thread_id, "user", resolved)
 
     prior = db.get_conversation(thread_id, limit=12)
     prompt = _build_prompt(barbershop_id)
@@ -582,7 +640,7 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
   <div class="form-row">
     <div class="field"><label>Nome do serviço</label><input id="svcName" placeholder="Ex: Corte de Cabelo"></div>
     <div class="field"><label>Duração (min)</label><input id="svcDuration" type="number" value="60" min="5"></div>
-    <div class="field"><label>Preço (centavos)</label><input id="svcPrice" type="number" value="0" min="0" placeholder="5000 = R$ 50,00"></div>
+    <div class="field"><label>Preço (R$)</label><input id="svcPrice" type="number" value="0" min="0" step="0.01" placeholder="50,00"></div>
     <div class="field" style="flex:0"><button class="btn btn-primary" onclick="createSvc()" id="svcBtn">Adicionar</button></div>
   </div>
   <input id="editId" type="hidden" value="">
@@ -623,7 +681,7 @@ async function api(method, path, body) {{
 async function createSvc() {{
   const name = document.getElementById('svcName').value.trim();
   const duration = parseInt(document.getElementById('svcDuration').value);
-  const price = parseInt(document.getElementById('svcPrice').value);
+  const price = Math.round(parseFloat(document.getElementById('svcPrice').value) * 100);
   const editId = document.getElementById('editId').value;
   if (!name) return msg('Informe o nome do serviço', 'error');
   try {{
@@ -641,7 +699,7 @@ async function createSvc() {{
 function editSvc(id, name, duration, price, active) {{
   document.getElementById('svcName').value = name;
   document.getElementById('svcDuration').value = duration;
-  document.getElementById('svcPrice').value = price;
+  document.getElementById('svcPrice').value = (price / 100).toFixed(2);
   document.getElementById('editId').value = id;
   document.getElementById('svcBtn').textContent = 'Salvar';
 }}
@@ -859,7 +917,8 @@ def wa_message_webhook(request: Request):
         db.save_message(thread_id, "assistant", reply)
         return {"reply": reply, "barbershop_id": barbershop_id}
 
-    db.save_message(thread_id, "user", text)
+    resolved = _resolve_dates(text)
+    db.save_message(thread_id, "user", resolved)
 
     prior = db.get_conversation(thread_id, limit=12)
     prompt = _build_prompt(barbershop_id)
