@@ -280,6 +280,23 @@ def register(body: RegisterRequest):
 
 _last_appointment: dict[str, int] = {}
 
+
+def _header_html(shop_name: str, page: str, is_admin: bool = False) -> str:
+    pages = [
+        ("dashboard", "Agenda"),
+        ("config", "Config"),
+        ("reports", "Relat\u00f3rios"),
+    ]
+    links = "".join(
+        f'<a href="/{k}" style="color:#fff;text-decoration:none{f';font-weight:700' if k == page else ''}">{v}</a>'
+        f'{" &nbsp;.&nbsp; " if i < len(pages) - 1 else ""}'
+        for i, (k, v) in enumerate(pages)
+    )
+    admin = f'&nbsp;.&nbsp;<a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if is_admin else ""
+    return f"""<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>{shop_name}</h1>
+<p>{links}{admin}<a href="/logout" class="logout">sair</a></p></div>"""
+
+
 _WEEKDAYS = {"segunda": 0, "terça": 1, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4, "sábado": 5, "sabado": 5, "domingo": 6}
 
 
@@ -705,16 +722,7 @@ img.qr{display:block;margin:12px auto;width:220px;image-rendering:pixelated}
 }
 </style></head>
 <body>
-<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>SHOP_NAME</h1>
-<p>
-  <a href="/dashboard" style="color:#fff;text-decoration:none;font-weight:700"> Agenda</a>
-  &nbsp;.&nbsp;
-  <a href="/config" style="color:#fff;text-decoration:none"> Config</a>
-  &nbsp;.&nbsp;
-  <a href="/reports" style="color:#fff;text-decoration:none"> Relatorios</a>
-  ADMIN_LINK
-  <a href="/logout" class="logout">sair</a>
-</p></div>
+HEADER_HTML
 <div class="container">
 <div class="card"><h2> WhatsApp</h2><span class="badge b-WA_STATUS">WA_STATUS</span></div>
 QR_BLOCK
@@ -824,15 +832,14 @@ render('WEEK_PARAM');
     services_json = json.dumps([{"name": s["name"]} for s in services])
 
     shop_name = shop['name']
-    admin_link = f'&nbsp;.&nbsp;<a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''
+    is_admin = bool(shop.get('is_admin'))
     qr_block2 = ""
     if wa_status == "awaiting_scan":
         qr_block2 = """<div class="card"><h2> Conectar WhatsApp</h2><p>Escaneie o QR code com o WhatsApp da empresa:</p><p class="hint">WhatsApp > ... > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
 
     return HTMLResponse(
         CAL_HTML
-        .replace("SHOP_NAME", shop_name)
-        .replace("ADMIN_LINK", admin_link)
+        .replace("HEADER_HTML", _header_html(shop_name, "dashboard", is_admin))
         .replace("WA_STATUS", wa_status)
         .replace("QR_BLOCK", qr_block2)
         .replace("APP_JSON", app_json)
@@ -902,48 +909,9 @@ def config_page(request: Request):
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
-.header{{background:#1a73e8;color:#fff;padding:20px;text-align:center}}
-.header .logo{{width:100px;height:100px;border-radius:50%;object-fit:cover;background:#fff;padding:6px;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
-.container{{max-width:900px;margin:20px auto;padding:0 16px}}
-.card{{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
-.card h2{{margin-bottom:12px;font-size:18px}}
-.badge{{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:600}}
-.b-connected{{background:#e6f4ea;color:#1e7e34}}
-.b-awaiting_scan{{background:#fef7e0;color:#e37400}}
-.b-inactive,.b-unknown{{background:#f1f3f4;color:#5f6368}}
-.b-disconnected{{background:#fce8e6;color:#c5221f}}
-img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
-table{{width:100%;border-collapse:collapse}}
-th,td{{padding:10px 8px;text-align:left;border-bottom:1px solid #eee;font-size:14px}}
-th{{color:#666;font-weight:600}}
-input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;width:100%;margin-bottom:8px}}
-.btn{{display:inline-block;padding:10px 20px;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}}
-.btn-primary{{background:#1a73e8;color:#fff}}
-.btn-primary:hover{{background:#1557b0}}
-.btn-danger{{background:#c5221f;color:#fff}}
-.btn-sm{{padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:14px}}
-.ftr{{text-align:center;padding:20px;color:#999;font-size:13px}}
-.form-row{{display:flex;gap:12px;align-items:end;flex-wrap:wrap}}
-.form-row .field{{flex:1;min-width:140px}}
-.form-row .field label{{display:block;font-size:13px;color:#666;margin-bottom:4px}}
-.empty{{text-align:center;color:#999;padding:30px}}
-.msg{{padding:10px;border-radius:6px;margin-bottom:12px;display:none}}
-.msg-success{{background:#e6f4ea;color:#1e7e34;display:block}}
-.msg-error{{background:#fce8e6;color:#c5221f;display:block}}
-.logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
-.nav a{{color:#fff;text-decoration:none}}
-.nav a:hover{{text-decoration:underline}}
 </style></head>
 <body>
-<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1>
-<p class="nav">
-  <a href="/dashboard">📋 Agenda</a>
-  &nbsp;·&nbsp;
-  <a href="/config" style="font-weight:700">⚙️ Config</a>
-  &nbsp;·&nbsp;
-  <a href="/reports">📊 Relatórios</a>
-  <a href="/logout" class="logout">sair</a>
-</p></div>
+{_header_html(shop['name'], 'config', bool(shop.get('is_admin')))}
 <div class="container">
 
 <div id="msg" class="msg"></div>
@@ -1089,7 +1057,6 @@ def reports_page(request: Request):
         <td><div class="bar"><div class="bfill" style="width:{bar_pct(r["total"], max_rev)}%"></div></div></td></tr>"""
         for r in stats["revenue"]
     )
-    admin_link = '· <a href="/admin" style="color:#888;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''
 
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -1117,11 +1084,7 @@ th{{color:#666;font-weight:600;font-size:12px}}
 .logout{{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}}
 </style></head>
 <body>
-<div class="header"><h1>Relatorios - {shop['name']}</h1>
-<p class="nav">
-  <a href="/dashboard"> Agenda</a> · <a href="/config"> Config</a> {admin_link}
-  <a href="/logout" class="logout">sair</a>
-</p></div>
+{_header_html(shop['name'], 'reports', bool(shop.get('is_admin')))}
 <div class="container">
 <div class="stat-grid">
 <div class="stat-card"><div class="n">{stats['total']}</div><div class="l">Total (30 dias)</div></div>
