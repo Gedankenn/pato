@@ -283,18 +283,20 @@ _last_appointment: dict[str, int] = {}
 
 def _header_html(shop_name: str, page: str, is_admin: bool = False) -> str:
     pages = [
-        ("dashboard", "Agenda"),
-        ("config", "Config"),
-        ("reports", "Relat\u00f3rios"),
+        ("dashboard", "📋 Agenda"),
+        ("config", "⚙️ Config"),
+        ("reports", "📊 Relat\u00f3rios"),
     ]
     links = "".join(
-        f'<a href="/{k}" style="color:#fff;text-decoration:none{f';font-weight:700' if k == page else ''}">{v}</a>'
-        f'{" &nbsp;.&nbsp; " if i < len(pages) - 1 else ""}'
-        for i, (k, v) in enumerate(pages)
+        f'<a href="/{k}" class="nav-item{" active" if k == page else ""}">{v}</a>'
+        for k, v in pages
     )
-    admin = f'&nbsp;.&nbsp;<a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if is_admin else ""
-    return f"""<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>{shop_name}</h1>
-<p>{links}{admin}<a href="/logout" class="logout">sair</a></p></div>"""
+    admin = f'<a href="/admin" class="nav-item">🛡️ Admin</a>' if is_admin else ""
+    return f"""<div class="topbar"><div class="topbar-inner">
+<a href="/dashboard" class="topbar-brand"><img src="/static/logo.png" class="topbar-logo" alt=""> <span>{shop_name}</span></a>
+<div class="topbar-nav">{links}{admin}</div>
+<a href="/logout" class="topbar-logout">sair</a>
+</div></div>"""
 
 
 _WEEKDAYS = {"segunda": 0, "terça": 1, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4, "sábado": 5, "sabado": 5, "domingo": 6}
@@ -655,9 +657,16 @@ def dashboard(request: Request, week: str = Query(None)):
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}
-.header{background:#1a73e8;color:#fff;padding:16px 20px;text-align:center}
-.header .logo{width:60px;height:60px;border-radius:50%;object-fit:cover;background:#fff;padding:4px;margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
-.header h1{font-size:20px}
+.topbar{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#fff;box-shadow:0 2px 12px rgba(0,0,0,.15)}
+.topbar-inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px;flex-wrap:wrap}
+.topbar-brand{display:flex;align-items:center;gap:8px;color:#fff;text-decoration:none;font-size:16px;font-weight:700}
+.topbar-logo{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#fff;padding:3px;box-shadow:0 2px 6px rgba(0,0,0,.2)}
+.topbar-nav{display:flex;gap:2px;flex:1;justify-content:center}
+.nav-item{padding:6px 14px;border-radius:8px;color:#fff;text-decoration:none;font-size:14px;transition:background .15s;white-space:nowrap}
+.nav-item:hover{background:rgba(255,255,255,.15)}
+.nav-item.active{background:rgba(255,255,255,.2);font-weight:600}
+.topbar-logout{margin-left:auto;color:rgba(255,255,255,.7);text-decoration:none;font-size:13px;transition:color .15s}
+.topbar-logout:hover{color:#fff}
 .container{max-width:1100px;margin:16px auto;padding:0 12px}
 .card{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
 .card h2{margin-bottom:8px;font-size:16px}
@@ -669,7 +678,6 @@ body{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}
 .hint{color:#666;font-size:13px;margin:8px 0}
 img.qr{display:block;margin:12px auto;width:220px;image-rendering:pixelated}
 .ftr{text-align:center;padding:16px;color:#999;font-size:12px}
-.logout{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}
 .nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;flex-wrap:wrap}
 .nav h2{font-size:16px}
 .nav .btns{display:flex;gap:4px}
@@ -910,13 +918,16 @@ def config_page(request: Request):
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
-.header{{background:#1a73e8;color:#fff;padding:16px 20px;text-align:center}}
-.header .logo{{width:60px;height:60px;border-radius:50%;object-fit:cover;background:#fff;padding:4px;margin-bottom:4px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
-.header h1{{font-size:20px}}
-.header p{{font-size:13px;margin-top:4px}}
-.header p a{{color:#fff;text-decoration:none}}
-.header p a:hover{{text-decoration:underline}}
-.logout{{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}}
+.topbar{{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#fff;box-shadow:0 2px 12px rgba(0,0,0,.15)}}
+.topbar-inner{{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px;flex-wrap:wrap}}
+.topbar-brand{{display:flex;align-items:center;gap:8px;color:#fff;text-decoration:none;font-size:16px;font-weight:700}}
+.topbar-logo{{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#fff;padding:3px;box-shadow:0 2px 6px rgba(0,0,0,.2)}}
+.topbar-nav{{display:flex;gap:2px;flex:1;justify-content:center}}
+.nav-item{{padding:6px 14px;border-radius:8px;color:#fff;text-decoration:none;font-size:14px;transition:background .15s;white-space:nowrap}}
+.nav-item:hover{{background:rgba(255,255,255,.15)}}
+.nav-item.active{{background:rgba(255,255,255,.2);font-weight:600}}
+.topbar-logout{{margin-left:auto;color:rgba(255,255,255,.7);text-decoration:none;font-size:13px}}
+.topbar-logout:hover{{color:#fff}}
 .container{{max-width:900px;margin:16px auto;padding:0 12px}}
 .card{{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
 .card h2{{margin-bottom:8px;font-size:16px}}
@@ -1098,8 +1109,16 @@ def reports_page(request: Request):
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
-.header{{background:#1a73e8;color:#fff;padding:16px 20px;text-align:center}}
-.header h1{{font-size:20px}}
+.topbar{{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#fff;box-shadow:0 2px 12px rgba(0,0,0,.15)}}
+.topbar-inner{{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:12px;padding:10px 16px;flex-wrap:wrap}}
+.topbar-brand{{display:flex;align-items:center;gap:8px;color:#fff;text-decoration:none;font-size:16px;font-weight:700}}
+.topbar-logo{{width:38px;height:38px;border-radius:50%;object-fit:cover;background:#fff;padding:3px;box-shadow:0 2px 6px rgba(0,0,0,.2)}}
+.topbar-nav{{display:flex;gap:2px;flex:1;justify-content:center}}
+.nav-item{{padding:6px 14px;border-radius:8px;color:#fff;text-decoration:none;font-size:14px;transition:background .15s;white-space:nowrap}}
+.nav-item:hover{{background:rgba(255,255,255,.15)}}
+.nav-item.active{{background:rgba(255,255,255,.2);font-weight:600}}
+.topbar-logout{{margin-left:auto;color:rgba(255,255,255,.7);text-decoration:none;font-size:13px}}
+.topbar-logout:hover{{color:#fff}}
 .container{{max-width:900px;margin:16px auto;padding:0 12px}}
 .card{{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
 .card h2{{margin-bottom:12px;font-size:16px}}
@@ -1113,7 +1132,6 @@ th{{color:#666;font-weight:600;font-size:12px}}
 .bar{{background:#f0f0f0;border-radius:4px;height:16px;overflow:hidden;min-width:40px}}
 .bfill{{height:100%;background:#1a73e8;border-radius:4px;min-width:2px;transition:width .3s}}
 .ftr{{text-align:center;padding:16px;color:#999;font-size:12px}}
-.nav{{text-align:center;padding:4px 0;font-size:13px}}
 .nav a{{color:#fff;text-decoration:none}}
 .logout{{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}}
 </style></head>
