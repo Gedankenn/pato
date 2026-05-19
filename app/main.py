@@ -620,7 +620,7 @@ def dashboard(request: Request, week: str = Query(None)):
 
     app_json = json.dumps(appointments)
 
-    today = datetime.utcnow()
+    today = datetime.now()
     if week:
         mon = datetime.strptime(week, "%Y-%m-%d")
     else:
