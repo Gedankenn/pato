@@ -742,7 +742,7 @@ var today=fmtDate(new Date());
 var filterOpts='<option value="">Todos os servicos</option>';
 SERVICES.forEach(function(s){filterOpts+='<option value="'+esc(s.name)+'"'+(filterService===s.name?' selected':'')+'>'+esc(s.name)+'</option>'});
 var html='<div class="filtro"><label>Filtrar:</label><select id="svcFilter" onchange="filterService=this.value;render(WEEK_PARAM)">'+filterOpts+'</select></div>';
-html+='<div class="nav"><div class="btns"><a href="?week=WEEK_PARAM"> Hoje</a></div><h2>'+fmtBr(weekDays[0])+' - '+fmtBr(weekDays[6])+'</h2><div class="btns">';
+html+='<div class="nav"><div class="btns"><a href="/dashboard"> Hoje</a></div><h2>'+fmtBr(weekDays[0])+' - '+fmtBr(weekDays[6])+'</h2><div class="btns">';
 var prev="PREV_WEEK";var next="NEXT_WEEK";
 html+='<a href="?week='+prev+'"> Anterior</a>';
 html+='<a href="?week='+next+'"> Proximo</a></div></div>';
