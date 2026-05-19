@@ -20,6 +20,7 @@ restart:
 		-e WHATSAPP_DATA_DIR=/wa-data \
 		-v $(DATA_VOLUME):/data \
 		-v $(WA_VOLUME):/wa-data \
+		-v /mnt/user/appdata/pato/.env:/app/.env \
 		$(IMAGE)
 
 deploy: build restart
@@ -62,7 +63,7 @@ sync:
 		--exclude='whatsapp/node_modules' \
 		--exclude='.opencode' \
 		/home/sabinho/github/pato/ $(SERVER):$(SERVER_DIR)
-	ssh $(SERVER) "cd $(SERVER_DIR) && docker build -t $(IMAGE) . && docker rm -f $(CONTAINER) 2>/dev/null && docker run -d --name $(CONTAINER) --network host --restart unless-stopped -e PATO_DB_PATH=$(DB_PATH) -e WHATSAPP_DATA_DIR=/wa-data -v $(DATA_VOLUME):/data -v $(WA_VOLUME):/wa-data $(IMAGE)"
+	ssh $(SERVER) "cd $(SERVER_DIR) && docker build -t $(IMAGE) . && docker rm -f $(CONTAINER) 2>/dev/null && docker run -d --name $(CONTAINER) --network host --restart unless-stopped -e PATO_DB_PATH=$(DB_PATH) -e WHATSAPP_DATA_DIR=/wa-data -v $(DATA_VOLUME):/data -v $(WA_VOLUME):/wa-data -v $(SERVER_DIR)/.env:/app/.env $(IMAGE)"
 
 sync-wa:
 	rsync -avz --delete \
