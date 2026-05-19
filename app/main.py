@@ -20,6 +20,9 @@ from app.schemas import (
     RegisterRequest,
     LoginRequest,
     AuthResponse,
+    ServiceCreate,
+    ServiceUpdate,
+    ServiceResponse,
 )
 from app import database as db
 from app.llm import SYSTEM_PROMPT
@@ -70,9 +73,12 @@ def format_appointment(a: dict) -> str:
 
 def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str | None, int | None]:
     if action == "create_appointment":
+        title = params.get("title", "").strip()
+        if not title:
+            return "Title is required. Ask the customer what service they want.", None
         appt_id = db.create_appointment(
             barbershop_id=barbershop_id,
-            title=params["title"],
+            title=title,
             description=params.get("description", ""),
             start_time=params["start_time"],
             end_time=params["end_time"],
@@ -222,6 +228,17 @@ def _extract_name(text: str) -> str | None:
     return name
 
 
+def _build_prompt(barbershop_id: int) -> str:
+    services = db.list_services(barbershop_id)
+    if services:
+        lines = "\n".join(
+            f"  - {s['name']}: R$ {s['price_cents']/100:.2f}, duração {s['duration_minutes']}min"
+            for s in services
+        )
+        return SYSTEM_PROMPT + f"\n\n== SERVIÇOS DISPONÍVEIS ==\n{lines}\n\nUse esta lista para informar preços e durações quando o cliente perguntar."
+    return SYSTEM_PROMPT
+
+
 @app.post("/chat", response_model=MessageResponse)
 def chat(
     request: MessageRequest,
@@ -249,9 +266,10 @@ def chat(
     db.save_message(thread_id, "user", request.message)
 
     prior = db.get_conversation(thread_id, limit=12)
-    history = [{"role": "system", "content": SYSTEM_PROMPT}] + prior
+    prompt = _build_prompt(barbershop_id)
+    history = [{"role": "system", "content": prompt}] + prior
 
-    for _ in range(5):
+    for iteration in range(3):
         raw = call_llm(history)
         parsed = extract_json(raw)
 
@@ -266,9 +284,10 @@ def chat(
         params = parsed.get("parameters", {})
         msg = parsed.get("message", "")
 
-        if action == "reply":
-            db.save_message(thread_id, "assistant", msg)
-            return MessageResponse(reply=msg, thread_id=thread_id)
+        if action == "reply" or iteration == 2:
+            reply = msg or "I've processed your request."
+            db.save_message(thread_id, "assistant", reply)
+            return MessageResponse(reply=reply, thread_id=thread_id)
 
         result, created_id = execute_action(action, params, barbershop_id)
 
@@ -282,12 +301,8 @@ def chat(
         history.append({"role": "assistant", "content": raw})
         history.append({
             "role": "user",
-            "content": f"The action was executed. Result:\n{result}",
+            "content": f"Action executed. Result:\n{result}\nNow reply to the customer with a friendly message.",
         })
-
-    reply = "I've processed your request."
-    db.save_message(thread_id, "assistant", reply)
-    return MessageResponse(reply=reply, thread_id=thread_id)
 
 
 # ── Appointment endpoints (scoped) ──────────────────────────────
@@ -350,6 +365,55 @@ def cancel_appointment(
         raise HTTPException(status_code=404, detail="Appointment not found")
     db.cancel_appointment(barbershop_id, appointment_id)
     return db.get_appointment(barbershop_id, appointment_id)
+
+
+# ── Services (scoped) ─────────────────────────────────────────
+
+@app.get("/services", response_model=list[ServiceResponse])
+def list_services(
+    barbershop_id: int = Depends(get_current_barbershop_id),
+):
+    return [_row_to_svc(s) for s in db.list_services(barbershop_id)]
+
+
+def _row_to_svc(row) -> dict:
+    d = dict(row)
+    d["active"] = bool(d["active"])
+    return d
+
+
+@app.post("/services", response_model=ServiceResponse)
+def create_service(
+    body: ServiceCreate,
+    barbershop_id: int = Depends(get_current_barbershop_id),
+):
+    svc_id = db.create_service(barbershop_id, body.name, body.duration_minutes, body.price_cents)
+    row = db.get_connection().execute("SELECT * FROM services WHERE id = ?", (svc_id,)).fetchone()
+    return _row_to_svc(row)
+
+
+@app.put("/services/{service_id}", response_model=ServiceResponse)
+def update_service(
+    service_id: int,
+    body: ServiceUpdate,
+    barbershop_id: int = Depends(get_current_barbershop_id),
+):
+    ok = db.update_service(service_id, barbershop_id, body.name, body.duration_minutes, body.price_cents, body.active)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Service not found")
+    row = db.get_connection().execute("SELECT * FROM services WHERE id = ?", (service_id,)).fetchone()
+    return _row_to_svc(row)
+
+
+@app.delete("/services/{service_id}")
+def delete_service(
+    service_id: int,
+    barbershop_id: int = Depends(get_current_barbershop_id),
+):
+    ok = db.delete_service(service_id, barbershop_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Service not found")
+    return {"ok": True}
 
 
 # ── WhatsApp Status (scoped) ────────────────────────────────────
@@ -425,7 +489,14 @@ img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 .logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
 </style></head>
 <body>
-<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1><p>{shop['name']}{' · <a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''} <a href="/logout" class="logout">sair</a></p></div>
+<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1>
+<p>
+  <a href="/dashboard" style="color:#fff;text-decoration:none;font-weight:700">📋 Agenda</a>
+  &nbsp;·&nbsp;
+  <a href="/config" style="color:#fff;text-decoration:none">⚙️ Config</a>
+  {' · <a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''}
+  <a href="/logout" class="logout">sair</a>
+</p></div>
 <div class="container">
 <div class="card"><h2>🤖 WhatsApp</h2><span class="badge b-{wa_status}">{wa_status}</span></div>
 {qr_block}
@@ -435,6 +506,157 @@ img.qr{{display:block;margin:12px auto;width:260px;image-rendering:pixelated}}
 <div class="ftr">PatoAgenda AI v1.0 — Agendamentos Inteligentes — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 <script>setTimeout(()=>location.reload(),15000)</script>
 </body></html>""")
+
+
+# ── Config Page ────────────────────────────────────────────────
+
+@app.get("/config", response_class=HTMLResponse)
+def config_page(request: Request):
+    barbershop_id = get_barbershop_id_from_request(request)
+    if not barbershop_id:
+        return RedirectResponse(url="/login")
+    shop = db.get_barbershop(barbershop_id)
+    services = db.list_services(barbershop_id, active_only=False)
+
+    svc_rows = "".join(
+        f"""<tr id="svc-{s['id']}"><td>{s['name']}</td><td>{s['duration_minutes']}min</td>
+        <td>R$ {s['price_cents']/100:.2f}</td>
+        <td><span class="badge {'b-connected' if s['active'] else 'b-inactive'}">{'ativo' if s['active'] else 'inativo'}</span></td>
+        <td>
+          <button class="btn-sm" onclick="editSvc({s['id']},'{s['name']}',{s['duration_minutes']},{s['price_cents']},{int(s['active'])})">✏️</button>
+          <button class="btn-sm btn-danger" onclick="delSvc({s['id']})">🗑️</button>
+        </td></tr>"""
+        for s in services
+    )
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Configuração - PatoAgenda AI</title><link rel="icon" type="image/png" href="/static/logo.png">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
+.header{{background:#1a73e8;color:#fff;padding:20px;text-align:center}}
+.header .logo{{width:100px;height:100px;border-radius:50%;object-fit:cover;background:#fff;padding:6px;margin-bottom:8px;box-shadow:0 2px 8px rgba(0,0,0,.15)}}
+.container{{max-width:900px;margin:20px auto;padding:0 16px}}
+.card{{background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
+.card h2{{margin-bottom:12px;font-size:18px}}
+.badge{{display:inline-block;padding:4px 12px;border-radius:20px;font-size:13px;font-weight:600}}
+.b-connected{{background:#e6f4ea;color:#1e7e34}}
+.b-inactive{{background:#f1f3f4;color:#5f6368}}
+table{{width:100%;border-collapse:collapse}}
+th,td{{padding:10px 8px;text-align:left;border-bottom:1px solid #eee;font-size:14px}}
+th{{color:#666;font-weight:600}}
+input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px;width:100%;margin-bottom:8px}}
+.btn{{display:inline-block;padding:10px 20px;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}}
+.btn-primary{{background:#1a73e8;color:#fff}}
+.btn-primary:hover{{background:#1557b0}}
+.btn-danger{{background:#c5221f;color:#fff}}
+.btn-sm{{padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:14px}}
+.ftr{{text-align:center;padding:20px;color:#999;font-size:13px}}
+.form-row{{display:flex;gap:12px;align-items:end;flex-wrap:wrap}}
+.form-row .field{{flex:1;min-width:140px}}
+.form-row .field label{{display:block;font-size:13px;color:#666;margin-bottom:4px}}
+.empty{{text-align:center;color:#999;padding:30px}}
+.msg{{padding:10px;border-radius:6px;margin-bottom:12px;display:none}}
+.msg-success{{background:#e6f4ea;color:#1e7e34;display:block}}
+.msg-error{{background:#fce8e6;color:#c5221f;display:block}}
+.logout{{float:right;color:#fff;text-decoration:none;font-size:14px;opacity:.8}}
+.nav a{{color:#fff;text-decoration:none}}
+.nav a:hover{{text-decoration:underline}}
+</style></head>
+<body>
+<div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>PatoAgenda AI</h1>
+<p class="nav">
+  <a href="/dashboard">📋 Agenda</a>
+  &nbsp;·&nbsp;
+  <a href="/config" style="font-weight:700">⚙️ Config</a>
+  <a href="/logout" class="logout">sair</a>
+</p></div>
+<div class="container">
+
+<div id="msg" class="msg"></div>
+
+<div class="card">
+  <h2>➕ Novo Serviço</h2>
+  <div class="form-row">
+    <div class="field"><label>Nome do serviço</label><input id="svcName" placeholder="Ex: Corte de Cabelo"></div>
+    <div class="field"><label>Duração (min)</label><input id="svcDuration" type="number" value="60" min="5"></div>
+    <div class="field"><label>Preço (centavos)</label><input id="svcPrice" type="number" value="0" min="0" placeholder="5000 = R$ 50,00"></div>
+    <div class="field" style="flex:0"><button class="btn btn-primary" onclick="createSvc()" id="svcBtn">Adicionar</button></div>
+  </div>
+  <input id="editId" type="hidden" value="">
+</div>
+
+<div class="card">
+  <h2>📦 Serviços</h2>
+  {"<table><thead><tr><th>Nome</th><th>Duração</th><th>Preço</th><th>Status</th><th></th></tr></thead><tbody>" + svc_rows + "</tbody></table>" if services else '<p class="empty">Nenhum serviço cadastrado. Adicione acima os serviços da sua barbearia com preço e duração.</p>'}
+</div>
+
+<div class="card">
+  <h2>💡 Dica</h2>
+  <p>Os serviços cadastrados aqui são enviados automaticamente para a IA. Quando um cliente perguntar "quanto custa?" ou "qual o valor?", a IA consulta esta lista para responder com os preços corretos.</p>
+</div>
+
+</div>
+<div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
+
+<script>
+const TOKEN = localStorage.getItem('token');
+function msg(text, type) {{
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg msg-' + type;
+  setTimeout(()=>el.style.display='none', 4000);
+}}
+
+async function api(method, path, body) {{
+  const res = await fetch(path, {{
+    method,
+    headers: {{'Authorization':'Bearer '+TOKEN,'Content-Type':'application/json'}},
+    body: body ? JSON.stringify(body) : undefined,
+  }});
+  if (!res.ok) {{ const d = await res.json(); throw new Error(d.detail || 'Erro'); }}
+  return res.json();
+}}
+
+async function createSvc() {{
+  const name = document.getElementById('svcName').value.trim();
+  const duration = parseInt(document.getElementById('svcDuration').value);
+  const price = parseInt(document.getElementById('svcPrice').value);
+  const editId = document.getElementById('editId').value;
+  if (!name) return msg('Informe o nome do serviço', 'error');
+  try {{
+    if (editId) {{
+      await api('PUT', '/services/' + editId, {{name, duration_minutes: duration, price_cents: price}});
+      msg('Serviço atualizado!', 'success');
+    }} else {{
+      await api('POST', '/services', {{name, duration_minutes: duration, price_cents: price}});
+      msg('Serviço adicionado!', 'success');
+    }}
+    setTimeout(()=>location.reload(), 1000);
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+
+function editSvc(id, name, duration, price, active) {{
+  document.getElementById('svcName').value = name;
+  document.getElementById('svcDuration').value = duration;
+  document.getElementById('svcPrice').value = price;
+  document.getElementById('editId').value = id;
+  document.getElementById('svcBtn').textContent = 'Salvar';
+}}
+
+async function delSvc(id) {{
+  if (!confirm('Excluir este serviço?')) return;
+  try {{
+    await api('DELETE', '/services/' + id);
+    document.getElementById('svc-'+id).remove();
+    msg('Serviço excluído!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+</script>
+</body></html>""")
+
 
 
 # ── Admin API ────────────────────────────────────────────────────
@@ -516,7 +738,7 @@ th{{color:#888;font-weight:600}}
 .logout{{float:right;color:#e94560;text-decoration:none;font-size:14px}}
 </style></head>
 <body>
-<div class="header"><h1>🛡️ Painel Admin <a href="/logout" class="logout">sair</a></h1></div>
+<div class="header"><h1>🛡️ Painel Admin</h1><p style="font-size:13px"><a href="/dashboard" style="color:#aaa;text-decoration:none">📋 Agenda</a> · <a href="/config" style="color:#aaa;text-decoration:none">⚙️ Config</a> · <a href="/logout" class="logout">sair</a></p></div>
 <div class="stats">
 <div class="stat-card"><div class="n">{stats['barbershops']}</div><div class="l">Empresas</div></div>
 <div class="stat-card"><div class="n">{stats['appointments']}</div><div class="l">Agendamentos</div></div>
@@ -640,9 +862,10 @@ def wa_message_webhook(request: Request):
     db.save_message(thread_id, "user", text)
 
     prior = db.get_conversation(thread_id, limit=12)
-    history = [{"role": "system", "content": SYSTEM_PROMPT}] + prior
+    prompt = _build_prompt(barbershop_id)
+    history = [{"role": "system", "content": prompt}] + prior
 
-    for _ in range(5):
+    for iteration in range(3):
         raw = call_llm(history)
         parsed = extract_json(raw)
         if not parsed:
@@ -655,18 +878,16 @@ def wa_message_webhook(request: Request):
         msg = parsed.get("message", "")
         result, created_id = execute_action(action, params, barbershop_id)
 
-        if action == "reply" or result is None:
-            db.save_message(thread_id, "assistant", msg)
-            return {"reply": msg, "barbershop_id": barbershop_id}
+        if action == "reply" or result is None or iteration == 2:
+            reply = msg or "Processado."
+            db.save_message(thread_id, "assistant", reply)
+            return {"reply": reply, "barbershop_id": barbershop_id}
 
         if created_id:
             _last_appointment[thread_id] = created_id
 
         history.append({"role": "assistant", "content": raw})
-        history.append({"role": "user", "content": f"Result: {result}"})
-
-    reply = "Processado."
-    db.save_message(thread_id, "assistant", reply)
+        history.append({"role": "user", "content": f"Action executed. Result: {result}. Now reply to the customer."})
     return {"reply": reply, "barbershop_id": barbershop_id}
 
 

@@ -51,6 +51,31 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# ── Services ─────────────────────────────────────────────────
+
+class ServiceCreate(BaseModel):
+    name: str
+    duration_minutes: int = 60
+    price_cents: int = 0
+
+
+class ServiceUpdate(BaseModel):
+    name: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    price_cents: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class ServiceResponse(BaseModel):
+    id: int
+    barbershop_id: int
+    name: str
+    duration_minutes: int
+    price_cents: int
+    active: bool
+    created_at: str
+
+
 class AuthResponse(BaseModel):
     token: str
     barbershop_id: int

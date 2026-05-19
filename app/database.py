@@ -56,6 +56,18 @@ def init_db():
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_thread ON conversations(thread_id)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS services (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                barbershop_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                duration_minutes INTEGER NOT NULL DEFAULT 60,
+                price_cents INTEGER NOT NULL DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (barbershop_id) REFERENCES barbershops(id)
+            )
+        """)
         _migrate(conn)
         _ensure_admin(conn)
 
@@ -243,6 +255,66 @@ def list_all_appointments():
             ORDER BY a.created_at DESC
         """).fetchall()
         return [dict(r) for r in rows]
+
+
+# ── Services ──────────────────────────────────────────────
+
+def list_services(barbershop_id: int, active_only: bool = True):
+    with get_connection() as conn:
+        query = "SELECT * FROM services WHERE barbershop_id = ?"
+        params = [barbershop_id]
+        if active_only:
+            query += " AND active = 1"
+        query += " ORDER BY name"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_service(barbershop_id: int, name: str, duration_minutes: int, price_cents: int):
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO services (barbershop_id, name, duration_minutes, price_cents, created_at) VALUES (?, ?, ?, ?, ?)",
+            (barbershop_id, name, duration_minutes, price_cents, now),
+        )
+        return cursor.lastrowid
+
+
+def update_service(service_id: int, barbershop_id: int, name: str | None = None,
+                   duration_minutes: int | None = None, price_cents: int | None = None,
+                   active: bool | None = None):
+    parts = []
+    vals = []
+    if name is not None:
+        parts.append("name = ?")
+        vals.append(name)
+    if duration_minutes is not None:
+        parts.append("duration_minutes = ?")
+        vals.append(duration_minutes)
+    if price_cents is not None:
+        parts.append("price_cents = ?")
+        vals.append(price_cents)
+    if active is not None:
+        parts.append("active = ?")
+        vals.append(1 if active else 0)
+    if not parts:
+        return False
+    vals += [service_id, barbershop_id]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f"UPDATE services SET {', '.join(parts)} WHERE id = ? AND barbershop_id = ?",
+            vals,
+        )
+        return cursor.rowcount > 0
+
+
+def delete_service(service_id: int, barbershop_id: int):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM services WHERE id = ? AND barbershop_id = ?",
+            (service_id, barbershop_id),
+        )
+        return cursor.rowcount > 0
 
 
 def get_stats():
