@@ -255,17 +255,15 @@ def list_all_barbershops():
         return [dict(r) for r in rows]
 
 
-def get_upcoming_appointments(minutes_start: int = 30, minutes_end: int = 60):
-    """Returns appointments starting in [minutes_start, minutes_end] that haven't been reminded."""
-    now = datetime.utcnow()
-    start_window = (now + timedelta(minutes=minutes_start)).isoformat()
-    end_window = (now + timedelta(minutes=minutes_end)).isoformat()
+def get_tomorrow_appointments():
+    """Returns appointments for tomorrow that haven't been reminded yet."""
+    tomorrow = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT a.*, b.whatsapp_number FROM appointments a JOIN barbershops b ON a.barbershop_id = b.id "
             "WHERE a.status = 'scheduled' AND a.reminder_sent = 0 "
-            "AND a.customer_phone != '' AND a.start_time BETWEEN ? AND ?",
-            (start_window, end_window),
+            "AND a.customer_phone != '' AND DATE(a.start_time) = ?",
+            (tomorrow,),
         ).fetchall()
         return [dict(r) for r in rows]
 

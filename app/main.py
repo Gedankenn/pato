@@ -69,32 +69,46 @@ def startup():
 
 
 def _reminder_loop():
-    """Background loop that sends WhatsApp reminders for upcoming appointments."""
+    """Envia lembretes WhatsApp 1 dia antes, sempre as 17:00."""
     import time
     while True:
+        now = datetime.now()
+        target = now.replace(hour=17, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        sleep_secs = (target - now).total_seconds()
+        time.sleep(sleep_secs)
+
         try:
-            upcoming = db.get_upcoming_appointments(minutes_start=30, minutes_end=60)
-            for a in upcoming:
+            appts = db.get_tomorrow_appointments()
+            by_shop_phone: dict[tuple[int, str], list[dict]] = {}
+            for a in appts:
                 phone = a.get("customer_phone")
                 if not phone:
                     continue
+                key = (a["barbershop_id"], phone)
+                by_shop_phone.setdefault(key, []).append(a)
+
+            for (shop_id, phone), items in by_shop_phone.items():
+                name = items[0].get("description") or "Cliente"
+                lines = [f"Ola {name}! Lembrete dos seus horarios de amanha:"]
+                for a in items:
+                    lines.append(f"- {a['title']} as {a['start_time'][11:16]}")
+                lines.append("\nAguardamos voce! 🐱")
+                msg = "\n".join(lines)
                 try:
-                    name = a.get("description") or "Cliente"
-                    service = a["title"]
-                    time_str = a["start_time"][11:16]
-                    msg = f"Ola {name}! Lembrete: seu horario de {service} hoje as {time_str} esta confirmado. Aguardamos voce! 🐱"
                     r = httpx.post(
                         f"{WHATSAPP_MANAGER_URL}/manager/send",
-                        json={"barbershop_id": a["barbershop_id"], "to": phone, "text": msg},
+                        json={"barbershop_id": shop_id, "to": phone, "text": msg},
                         timeout=10,
                     )
                     if r.status_code == 200:
-                        db.mark_reminder_sent(a["id"])
+                        for a in items:
+                            db.mark_reminder_sent(a["id"])
                 except Exception:
                     pass
         except Exception:
             pass
-        time.sleep(60)
 
 
 def format_appointment(a: dict) -> str:
