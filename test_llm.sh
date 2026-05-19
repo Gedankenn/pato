@@ -10,12 +10,17 @@ RES=$(curl -s -X POST $API/auth/login \
 TOKEN=$(echo $RES | sed 's/.*"token":"\([^"]*\)".*/\1/')
 echo "OK (token: ${TOKEN:0:20}...)"
 
+THREAD=""
+
 chat() {
   echo -e "\n🤔 $1"
+  BODY="{\"message\":\"$1\"}"
+  [ -n "$THREAD" ] && BODY="{\"message\":\"$1\",\"thread_id\":\"$THREAD\"}"
   RES=$(curl -s -X POST $API/chat \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"message\":\"$1\"}")
+    -d "$BODY")
+  THREAD=$(echo $RES | sed 's/.*"thread_id":"\([^"]*\)".*/\1/')
   echo "🤖 $(echo $RES | sed 's/.*"reply":"\([^"]*\)".*/\1/')"
 }
 

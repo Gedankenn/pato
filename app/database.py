@@ -46,6 +46,16 @@ def init_db():
                 FOREIGN KEY (barbershop_id) REFERENCES barbershops(id)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_conv_thread ON conversations(thread_id)")
         _migrate(conn)
         _ensure_admin(conn)
 
@@ -169,6 +179,47 @@ def cancel_appointment(barbershop_id, appointment_id):
         cursor = conn.execute(
             "UPDATE appointments SET status = 'cancelled', updated_at = ? WHERE id = ? AND barbershop_id = ?",
             (now, appointment_id, barbershop_id),
+        )
+        return cursor.rowcount > 0
+
+
+# ── Conversations ─────────────────────────────────────────────
+
+def save_message(thread_id: str, role: str, content: str):
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO conversations (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (thread_id, role, content, now),
+        )
+
+
+def get_conversation(thread_id: str, limit: int = 10):
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT role, content FROM conversations WHERE thread_id = ? ORDER BY created_at DESC LIMIT ?",
+            (thread_id, limit),
+        ).fetchall()
+        result = [dict(r) for r in rows]
+        result.reverse()
+        return result
+
+
+def update_appointment(barbershop_id, appointment_id, title=None, description=None):
+    now = datetime.utcnow().isoformat()
+    parts = ["updated_at = ?"]
+    vals = [now]
+    if title is not None:
+        parts.append("title = ?")
+        vals.append(title)
+    if description is not None:
+        parts.append("description = ?")
+        vals.append(description)
+    vals += [appointment_id, barbershop_id]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f"UPDATE appointments SET {', '.join(parts)} WHERE id = ? AND barbershop_id = ?",
+            vals,
         )
         return cursor.rowcount > 0
 

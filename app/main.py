@@ -68,7 +68,7 @@ def format_appointment(a: dict) -> str:
     )
 
 
-def execute_action(action: str, params: dict, barbershop_id: int) -> str | None:
+def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str | None, int | None]:
     if action == "create_appointment":
         appt_id = db.create_appointment(
             barbershop_id=barbershop_id,
@@ -78,25 +78,25 @@ def execute_action(action: str, params: dict, barbershop_id: int) -> str | None:
             end_time=params["end_time"],
         )
         a = db.get_appointment(barbershop_id, appt_id)
-        return f"Created: {format_appointment(a)}"
+        return f"Created: {format_appointment(a)}", appt_id
 
     elif action == "list_appointments":
         appointments = db.list_appointments(barbershop_id, status=params.get("status"))
         if not appointments:
-            return "No appointments found."
-        return "\n".join(format_appointment(a) for a in appointments)
+            return "No appointments found.", None
+        return "\n".join(format_appointment(a) for a in appointments), None
 
     elif action == "get_appointment":
         a = db.get_appointment(barbershop_id, params["appointment_id"])
         if not a:
-            return f"Appointment #{params['appointment_id']} not found."
+            return f"Appointment #{params['appointment_id']} not found.", None
         return (
             f"Appointment #{a['id']}: {a['title']}\n"
             f"  Description: {a['description']}\n"
             f"  Start: {a['start_time']}\n"
             f"  End: {a['end_time']}\n"
             f"  Status: {a['status']}"
-        )
+        ), None
 
     elif action == "reschedule_appointment":
         success = db.reschedule_appointment(
@@ -106,19 +106,30 @@ def execute_action(action: str, params: dict, barbershop_id: int) -> str | None:
             params["new_end_time"],
         )
         if not success:
-            return f"Appointment #{params['appointment_id']} not found."
+            return f"Appointment #{params['appointment_id']} not found.", None
         a = db.get_appointment(barbershop_id, params["appointment_id"])
-        return f"Rescheduled: {format_appointment(a)}"
+        return f"Rescheduled: {format_appointment(a)}", None
 
     elif action == "cancel_appointment":
         success = db.cancel_appointment(barbershop_id, params["appointment_id"])
         if not success:
-            return f"Appointment #{params['appointment_id']} not found."
+            return f"Appointment #{params['appointment_id']} not found.", None
         a = db.get_appointment(barbershop_id, params["appointment_id"])
-        return f"Cancelled: {format_appointment(a)}"
+        return f"Cancelled: {format_appointment(a)}", None
 
-    elif action == "reply":
-        return None
+    elif action == "update_appointment":
+        success = db.update_appointment(
+            barbershop_id,
+            params["appointment_id"],
+            title=params.get("title"),
+            description=params.get("description"),
+        )
+        if not success:
+            return f"Appointment #{params['appointment_id']} not found.", None
+        a = db.get_appointment(barbershop_id, params["appointment_id"])
+        return f"Updated: {format_appointment(a)}", None
+
+    return None, None
 
     return f"Unknown action: {action}"
 
@@ -131,7 +142,11 @@ def extract_json(text: str) -> dict | None:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        return None
+        pass
+    # If no valid JSON, treat entire text as a reply message
+    if text:
+        return {"action": "reply", "parameters": {}, "message": text}
+    return None
 
 
 def call_llm(messages: list) -> str:
@@ -187,6 +202,26 @@ def register(body: RegisterRequest):
 
 # ── Chat ────────────────────────────────────────────────────────
 
+_last_appointment: dict[str, int] = {}
+
+_NAME_RE = re.compile(
+    r"(?:pode ser para (?:o |a )?|é para (?:o |a )?|é |(?:o |a )?nome (?:do cliente )?é )(.+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_name(text: str) -> str | None:
+    m = _NAME_RE.search(text.strip())
+    if not m:
+        return None
+    name = m.group(1).strip()
+    if not name or len(name) < 2 or len(name) > 50:
+        return None
+    if name.lower() in ("hoje", "amanhã", "agora", "depois", "cedo", "tarde", "noite", "manhã", "sim", "não", "ok"):
+        return None
+    return name
+
+
 @app.post("/chat", response_model=MessageResponse)
 def chat(
     request: MessageRequest,
@@ -194,16 +229,34 @@ def chat(
 ):
     thread_id = request.thread_id or f"thread_{datetime.utcnow().timestamp()}"
 
-    history = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": request.message},
-    ]
+    # Auto-assign name to last created appointment
+    name = _extract_name(request.message)
+    if name and thread_id in _last_appointment:
+        db.update_appointment(
+            barbershop_id,
+            _last_appointment[thread_id],
+            description=name,
+        )
+        reply = f"Anotado! É para o {name} ✅"
+        db.save_message(thread_id, "user", request.message)
+        db.save_message(thread_id, "assistant", json.dumps({
+            "action": "update_appointment",
+            "parameters": {"appointment_id": _last_appointment[thread_id], "description": name},
+            "message": reply,
+        }))
+        return MessageResponse(reply=reply, thread_id=thread_id)
+
+    db.save_message(thread_id, "user", request.message)
+
+    prior = db.get_conversation(thread_id, limit=12)
+    history = [{"role": "system", "content": SYSTEM_PROMPT}] + prior
 
     for _ in range(5):
         raw = call_llm(history)
         parsed = extract_json(raw)
 
         if not parsed or not isinstance(parsed, dict):
+            db.save_message(thread_id, "assistant", "I couldn't process that request.")
             return MessageResponse(
                 reply="I couldn't process that request. Could you rephrase?",
                 thread_id=thread_id,
@@ -213,10 +266,18 @@ def chat(
         params = parsed.get("parameters", {})
         msg = parsed.get("message", "")
 
-        result = execute_action(action, params, barbershop_id)
-
-        if action == "reply" or result is None:
+        if action == "reply":
+            db.save_message(thread_id, "assistant", msg)
             return MessageResponse(reply=msg, thread_id=thread_id)
+
+        result, created_id = execute_action(action, params, barbershop_id)
+
+        if result is None:
+            db.save_message(thread_id, "assistant", msg or "I couldn't process that request.")
+            return MessageResponse(reply=msg or "I couldn't process that request.", thread_id=thread_id)
+
+        if created_id:
+            _last_appointment[thread_id] = created_id
 
         history.append({"role": "assistant", "content": raw})
         history.append({
@@ -224,10 +285,9 @@ def chat(
             "content": f"The action was executed. Result:\n{result}",
         })
 
-    return MessageResponse(
-        reply="I've processed your request.",
-        thread_id=thread_id,
-    )
+    reply = "I've processed your request."
+    db.save_message(thread_id, "assistant", reply)
+    return MessageResponse(reply=reply, thread_id=thread_id)
 
 
 # ── Appointment endpoints (scoped) ──────────────────────────────
@@ -563,29 +623,51 @@ def wa_message_webhook(request: Request):
     if not barbershop_id or not text:
         return {"error": "missing fields"}
 
-    history = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": text},
-    ]
+    thread_id = f"wa_{barbershop_id}_{wa_number}"
+
+    name = _extract_name(text)
+    if name and thread_id in _last_appointment:
+        db.update_appointment(
+            barbershop_id,
+            _last_appointment[thread_id],
+            description=name,
+        )
+        reply = f"Anotado! É para o {name} ✅"
+        db.save_message(thread_id, "user", text)
+        db.save_message(thread_id, "assistant", reply)
+        return {"reply": reply, "barbershop_id": barbershop_id}
+
+    db.save_message(thread_id, "user", text)
+
+    prior = db.get_conversation(thread_id, limit=12)
+    history = [{"role": "system", "content": SYSTEM_PROMPT}] + prior
 
     for _ in range(5):
         raw = call_llm(history)
         parsed = extract_json(raw)
         if not parsed:
-            return {"reply": "Desculpe, não entendi. Pode repetir?", "barbershop_id": barbershop_id}
+            reply = "Desculpe, não entendi. Pode repetir?"
+            db.save_message(thread_id, "assistant", reply)
+            return {"reply": reply, "barbershop_id": barbershop_id}
 
         action = parsed.get("action", "reply")
         params = parsed.get("parameters", {})
         msg = parsed.get("message", "")
-        result = execute_action(action, params, barbershop_id)
+        result, created_id = execute_action(action, params, barbershop_id)
 
         if action == "reply" or result is None:
+            db.save_message(thread_id, "assistant", msg)
             return {"reply": msg, "barbershop_id": barbershop_id}
+
+        if created_id:
+            _last_appointment[thread_id] = created_id
 
         history.append({"role": "assistant", "content": raw})
         history.append({"role": "user", "content": f"Result: {result}"})
 
-    return {"reply": "Processado.", "barbershop_id": barbershop_id}
+    reply = "Processado."
+    db.save_message(thread_id, "assistant", reply)
+    return {"reply": reply, "barbershop_id": barbershop_id}
 
 
 # ── Redirect root to login ──────────────────────────────────────
