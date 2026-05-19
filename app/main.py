@@ -840,6 +840,7 @@ render('WEEK_PARAM');
     return HTMLResponse(
         CAL_HTML
         .replace("HEADER_HTML", _header_html(shop_name, "dashboard", is_admin))
+        .replace("SHOP_NAME", shop_name)
         .replace("WA_STATUS", wa_status)
         .replace("QR_BLOCK", qr_block2)
         .replace("APP_JSON", app_json)
