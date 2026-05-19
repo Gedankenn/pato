@@ -63,6 +63,38 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
 @app.on_event("startup")
 def startup():
     db.init_db()
+    import threading
+    t = threading.Thread(target=_reminder_loop, daemon=True)
+    t.start()
+
+
+def _reminder_loop():
+    """Background loop that sends WhatsApp reminders for upcoming appointments."""
+    import time
+    while True:
+        try:
+            upcoming = db.get_upcoming_appointments(minutes_start=30, minutes_end=60)
+            for a in upcoming:
+                phone = a.get("customer_phone")
+                if not phone:
+                    continue
+                try:
+                    name = a.get("description") or "Cliente"
+                    service = a["title"]
+                    time_str = a["start_time"][11:16]
+                    msg = f"Ola {name}! Lembrete: seu horario de {service} hoje as {time_str} esta confirmado. Aguardamos voce! 🐱"
+                    r = httpx.post(
+                        f"{WHATSAPP_MANAGER_URL}/manager/send",
+                        json={"barbershop_id": a["barbershop_id"], "to": phone, "text": msg},
+                        timeout=10,
+                    )
+                    if r.status_code == 200:
+                        db.mark_reminder_sent(a["id"])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        time.sleep(60)
 
 
 def format_appointment(a: dict) -> str:
@@ -73,7 +105,7 @@ def format_appointment(a: dict) -> str:
     )
 
 
-def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str | None, int | None]:
+def execute_action(action: str, params: dict, barbershop_id: int, customer_phone: str = "") -> tuple[str | None, int | None]:
     if action == "create_appointment":
         title = params.get("title", "").strip()
         if not title:
@@ -88,6 +120,7 @@ def execute_action(action: str, params: dict, barbershop_id: int) -> tuple[str |
             description=params.get("description", ""),
             start_time=start,
             end_time=end,
+            customer_phone=customer_phone,
         )
         a = db.get_appointment(barbershop_id, appt_id)
         return f"Created: {format_appointment(a)}", appt_id
@@ -584,7 +617,7 @@ def dashboard(request: Request, week: str = Query(None)):
     CAL_HTML = """
 <!DOCTYPE html>
 <html lang="pt-BR">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>PatoAgenda AI - SHOP_NAME</title><link rel="icon" type="image/png" href="/static/logo.png">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1,user-scalable=no"><title>PatoAgenda AI - SHOP_NAME</title><link rel="icon" type="image/png" href="/static/logo.png">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}
@@ -608,28 +641,51 @@ img.qr{display:block;margin:12px auto;width:220px;image-rendering:pixelated}
 .nav .btns{display:flex;gap:4px}
 .nav button,.nav a{padding:6px 14px;border:1px solid #ddd;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;text-decoration:none;color:#333}
 .nav button:hover,.nav a:hover{background:#f0f0f0}
-.cal{display:grid;grid-template-columns:50px repeat(7,1fr);font-size:12px;overflow-x:auto}
+.filtro{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}
+.filtro label{font-size:13px;color:#666;font-weight:600}
+.filtro select{padding:6px 10px;border:1px solid #ddd;border-radius:6px;font-size:13px;background:#fff;cursor:pointer;flex:1;max-width:220px}
+.cal{display:grid;grid-template-columns:50px repeat(7,1fr);font-size:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}
 .cal .ch{background:#f9f9f9;font-weight:600;text-align:center;padding:6px 2px;border-bottom:2px solid #ddd;position:sticky;top:0;z-index:2;font-size:11px}
 .cal .ch.today{background:#1a73e8;color:#fff;border-radius:6px 6px 0 0}
 .cal .tm{text-align:right;padding:4px 6px;color:#999;font-size:10px;border-top:1px solid #f0f0f0;height:48px}
-.cal .sl{border-left:1px solid #eee;border-top:1px solid #f0f0f0;position:relative;min-height:48px;padding:2px}
+.cal .sl{border-left:1px solid #eee;border-top:1px solid #f0f0f0;position:relative;min-height:48px;padding:2px;cursor:pointer;transition:background .15s}
 .cal .sl.today{background:#f0f6ff}
 .cal .sl.hl{background:#fafafa}
-.appt{position:absolute;left:2px;right:2px;border-radius:4px;padding:3px 5px;font-size:11px;cursor:pointer;overflow:hidden;z-index:1;color:#fff;min-height:20px;border:1px solid rgba(0,0,0,.1)}
-.appt:hover{opacity:.9;z-index:3}
+.cal .sl:active{background:#e8f0fe}
+.appt{position:absolute;left:2px;right:2px;border-radius:4px;padding:3px 5px;font-size:11px;cursor:pointer;overflow:hidden;z-index:1;color:#fff;min-height:20px;border:1px solid rgba(0,0,0,.1);transition:transform .1s,box-shadow .1s}
+.appt:hover{opacity:.9;z-index:3;transform:scale(1.02);box-shadow:0 2px 8px rgba(0,0,0,.2)}
 .appt .n{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .appt .d{font-size:10px;opacity:.9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;align-items:center;justify-content:center}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99;align-items:center;justify-content:center;animation:fadeIn .2s}
 .modal-overlay.show{display:flex}
-.modal{background:#fff;border-radius:12px;padding:24px;width:90%;max-width:380px;box-shadow:0 4px 20px rgba(0,0,0,.2)}
-.modal h3{margin-bottom:8px}
-.modal p{margin:4px 0;font-size:14px;color:#555}
-.modal .btns{display:flex;gap:8px;margin-top:16px}
-.modal .btns button{flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
-.modal .btns .ccl{background:#c5221f;color:#fff}
-.modal .btns .ok{background:#1a73e8;color:#fff}
-.modal .close{background:#f1f3f4;color:#333}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.modal{background:#fff;border-radius:16px;width:92%;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,.25);overflow:hidden;animation:slideUp .25s}
+.modal .mhead{padding:18px 20px 14px;position:relative}
+.modal .mhead h3{font-size:18px;margin:0;padding-right:28px}
+.modal .mhead .close-x{position:absolute;top:12px;right:14px;width:30px;height:30px;border:none;border-radius:50%;background:rgba(0,0,0,.08);color:#555;font-size:20px;line-height:30px;text-align:center;cursor:pointer;transition:background .15s}
+.modal .mhead .close-x:hover{background:rgba(0,0,0,.15)}
+.modal .mbody{padding:0 20px 18px}
+.modal .mrow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px}
+.modal .mrow:last-child{border:none}
+.modal .mrow .ico{width:22px;text-align:center;font-size:16px;flex-shrink:0}
+.modal .mrow .val{color:#555;flex:1}
+.modal .mrow .val b{color:#333}
+.modal .mfoot{display:flex;gap:8px;padding:12px 20px;border-top:1px solid #eee}
+.modal .mfoot button{flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600;transition:opacity .15s}
+.modal .mfoot button:active{opacity:.7}
+.modal .mfoot .ccl{background:#c5221f;color:#fff}
+.modal .mfoot .ok{background:#1a73e8;color:#fff}
+.modal .mfoot .close{background:#f1f3f4;color:#333}
 .empty{text-align:center;color:#999;padding:40px;grid-column:1/9}
+@media(max-width:640px){
+.cal{grid-template-columns:40px repeat(7,1fr);font-size:11px}
+.cal .tm{font-size:9px;height:40px;padding:2px 4px}
+.cal .sl{min-height:40px}
+.appt{font-size:10px;padding:2px 3px}
+.appt .d{display:none}
+.nav h2{font-size:14px}
+}
 </style></head>
 <body>
 <div class="header"><img src="/static/logo.png" class="logo" alt="PatoAgenda AI"><h1>SHOP_NAME</h1>
@@ -637,6 +693,8 @@ img.qr{display:block;margin:12px auto;width:220px;image-rendering:pixelated}
   <a href="/dashboard" style="color:#fff;text-decoration:none;font-weight:700"> Agenda</a>
   &nbsp;.&nbsp;
   <a href="/config" style="color:#fff;text-decoration:none"> Config</a>
+  &nbsp;.&nbsp;
+  <a href="/reports" style="color:#fff;text-decoration:none"> Relatorios</a>
   ADMIN_LINK
   <a href="/logout" class="logout">sair</a>
 </p></div>
@@ -654,14 +712,20 @@ const DAYS = DAYS_JSON;
 const COLORS = ["#1a73e8","#e37400","#1e7e34","#9334e6","#c5221f","#0d7377","#e67e22","#2ecc71","#e74c3c","#3498db","#9b59b6","#f39c12","#1abc9c","#d35400","#2980b9","#8e44ad","#27ae60","#c0392b","#16a085","#f1c40f"];
 const HOURS = [];
 for(let h=8;h<=20;h++){HOURS.push(('0'+h).slice(-2)+':00')}
+const SERVICES = SERVICES_JSON;
+let filterService = '';
 function getMon(d){d=new Date(d);var day=d.getDay();d.setDate(d.getDate()-(day===0?6:day-1));return d}
 function fmtDate(d){var m=d.getMonth()+1;return d.getFullYear()+'-'+('0'+m).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
 function fmtBr(d){return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)}
+function esc(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
 function render(weekStart){
 var mon=getMon(weekStart),weekDays=[];
 for(var i=0;i<7;i++){var d=new Date(mon);d.setDate(mon.getDate()+i);weekDays.push(d)}
 var today=fmtDate(new Date());
-var html='<div class="nav"><div class="btns"><a href="?week=WEEK_PARAM"> Hoje</a></div><h2>'+fmtBr(weekDays[0])+' - '+fmtBr(weekDays[6])+'</h2><div class="btns">';
+var filterOpts='<option value="">Todos os servicos</option>';
+SERVICES.forEach(function(s){filterOpts+='<option value="'+esc(s.name)+'"'+(filterService===s.name?' selected':'')+'>'+esc(s.name)+'</option>'});
+var html='<div class="filtro"><label>Filtrar:</label><select id="svcFilter" onchange="filterService=this.value;render(WEEK_PARAM)">'+filterOpts+'</select></div>';
+html+='<div class="nav"><div class="btns"><a href="?week=WEEK_PARAM"> Hoje</a></div><h2>'+fmtBr(weekDays[0])+' - '+fmtBr(weekDays[6])+'</h2><div class="btns">';
 var prev="PREV_WEEK";var next="NEXT_WEEK";
 html+='<a href="?week='+prev+'"> Anterior</a>';
 html+='<a href="?week='+next+'"> Proximo</a></div></div>';
@@ -674,6 +738,7 @@ for(var d=0;d<7;d++){var f=fmtDate(weekDays[d]);html+='<div class="sl'+(f===toda
 var slots={};
 APPOINTMENTS.forEach(function(a){
 if(a.status!=='scheduled')return;
+if(filterService && a.title!==filterService)return;
 var s=new Date(a.start_time),e=new Date(a.end_time);
 var dayIdx=weekDays.findIndex(function(wd){return fmtDate(wd)===fmtDate(s)});
 if(dayIdx<0)return;
@@ -698,7 +763,7 @@ var n=item.a.description||'';
 var d=document.createElement('div');d.className='appt';
 d.style.cssText='background:'+c+';height:'+item.height+'px;top:'+item.top+'%';
 var startStr=item.a.start_time.slice(11,16);
-d.innerHTML='<div class="n">'+item.a.title+'</div>'+(n?'<div class="d">'+n+'</div>':'')+'<div class="d">'+startStr+'</div>';
+d.innerHTML='<div class="n">'+esc(item.a.title)+'</div>'+(n?'<div class="d">'+esc(n)+'</div>':'')+'<div class="d">'+startStr+'</div>';
 d.onclick=function(){showModal(item.a)};
 el.appendChild(d)
 })
@@ -706,12 +771,18 @@ el.appendChild(d)
 document.getElementById('cal').innerHTML=html;
 }
 function showModal(a){
-var h='<h3>'+a.title+'</h3>';
-if(a.description)h+='<p><b>Cliente:</b> '+a.description+'</p>';
-h+='<p><b>Inicio:</b> '+a.start_time.slice(0,16).replace('T',' ')+'</p>';
-h+='<p><b>Fim:</b> '+a.end_time.slice(0,16).replace('T',' ')+'</p>';
-h+='<p><b>Status:</b> '+a.status+'</p>';
-h+='<div class="btns">';
+var c=COLORS[a.id%COLORS.length];
+var h='<div class="mhead" style="background:'+c+'10;border-bottom:3px solid '+c+'"><h3>'+esc(a.title)+'</h3><button class="close-x" onclick="closeModal()">&times;</button></div>';
+h+='<div class="mbody">';
+if(a.description)h+='<div class="mrow"><span class="ico">👤</span><div class="val"><b>Cliente:</b> '+esc(a.description)+'</div></div>';
+h+='<div class="mrow"><span class="ico">📅</span><div class="val"><b>Inicio:</b> '+a.start_time.slice(0,16).replace('T',' ')+'</div></div>';
+h+='<div class="mrow"><span class="ico">⏰</span><div class="val"><b>Fim:</b> '+a.end_time.slice(0,16).replace('T',' ')+'</div></div>';
+var dur=Math.round((new Date(a.end_time)-new Date(a.start_time))/60000);
+h+='<div class="mrow"><span class="ico">⏱️</span><div class="val"><b>Duracao:</b> '+dur+'min</div></div>';
+var stCls=a.status==='scheduled'?'b-connected':a.status==='cancelled'?'b-disconnected':'b-awaiting_scan';
+var stTxt=a.status==='scheduled'?'Confirmado':a.status==='cancelled'?'Cancelado':'Reagendado';
+h+='<div class="mrow"><span class="ico">📌</span><div class="val"><b>Status:</b> <span class="badge '+stCls+'">'+stTxt+'</span></div></div>';
+h+='</div><div class="mfoot">';
 if(a.status==='scheduled'){h+='<button class="ccl" onclick="cancelAppt('+a.id+')">Cancelar</button>'}
 h+='<button class="close" onclick="closeModal()">Fechar</button></div>';
 document.getElementById('modalBody').innerHTML=h;
@@ -731,6 +802,9 @@ render('WEEK_PARAM');
 </script>
 </body></html>"""
 
+    services = db.list_services(barbershop_id, active_only=True)
+    services_json = json.dumps([{"name": s["name"]} for s in services])
+
     shop_name = shop['name']
     admin_link = f'&nbsp;.&nbsp;<a href="/admin" style="color:#fff;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''
     qr_block2 = ""
@@ -745,6 +819,7 @@ render('WEEK_PARAM');
         .replace("QR_BLOCK", qr_block2)
         .replace("APP_JSON", app_json)
         .replace("DAYS_JSON", json.dumps(DAYS))
+        .replace("SERVICES_JSON", services_json)
         .replace("WEEK_PARAM", week_param)
         .replace("PREV_WEEK", prev_week)
         .replace("NEXT_WEEK", next_week)
@@ -916,6 +991,98 @@ async function delSvc(id) {{
 </script>
 </body></html>""")
 
+
+# ── Reports Page ────────────────────────────────────────────────
+
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(request: Request):
+    barbershop_id = get_barbershop_id_from_request(request)
+    if not barbershop_id:
+        return RedirectResponse(url="/login")
+    shop = db.get_barbershop(barbershop_id)
+    stats = db.get_barbershop_stats(barbershop_id, days=30)
+
+    def bar_pct(v: float, mx: float) -> str:
+        if mx <= 0:
+            return "0"
+        return f"{v / mx * 100:.1f}"
+
+    max_count = max((s["count"] for s in stats["by_service"]), default=0)
+    max_day = max((d["count"] for d in stats["by_day"]), default=0)
+    max_rev = max((r["total"] for r in stats["revenue"]), default=0)
+
+    svc_rows = "".join(
+        f"""<tr><td>{s["service"]}</td><td>{s["count"]}</td>
+        <td><div class="bar"><div class="bfill" style="width:{bar_pct(s["count"], max_count)}%"></div></div></td></tr>"""
+        for s in stats["by_service"]
+    )
+    day_rows = "".join(
+        f"""<tr><td>{d["day"]}</td><td>{d["count"]}</td>
+        <td><div class="bar"><div class="bfill" style="width:{bar_pct(d["count"], max_day)}%"></div></div></td></tr>"""
+        for d in stats["by_day"]
+    )
+    rev_rows = "".join(
+        f"""<tr><td>{r["service"]}</td><td>{r["count"]}x</td><td>R$ {r["price"]:.2f}</td>
+        <td>R$ {r["total"]:.2f}</td>
+        <td><div class="bar"><div class="bfill" style="width:{bar_pct(r["total"], max_rev)}%"></div></div></td></tr>"""
+        for r in stats["revenue"]
+    )
+    admin_link = '· <a href="/admin" style="color:#888;text-decoration:none">Admin</a>' if shop.get('is_admin') else ''
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Relatorios - PatoAgenda AI</title><link rel="icon" type="image/png" href="/static/logo.png">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,sans-serif;background:#f5f5f5;color:#333}}
+.header{{background:#1a73e8;color:#fff;padding:16px 20px;text-align:center}}
+.header h1{{font-size:20px}}
+.container{{max-width:900px;margin:16px auto;padding:0 12px}}
+.card{{background:#fff;border-radius:12px;padding:16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)}}
+.card h2{{margin-bottom:12px;font-size:16px}}
+.stat-grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}}
+.stat-card{{background:#f8f9fa;border-radius:8px;padding:12px;text-align:center}}
+.stat-card .n{{font-size:24px;font-weight:700;color:#1a73e8}}
+.stat-card .l{{font-size:12px;color:#666;margin-top:2px}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+th,td{{padding:6px 8px;text-align:left;border-bottom:1px solid #eee}}
+th{{color:#666;font-weight:600;font-size:12px}}
+.bar{{background:#f0f0f0;border-radius:4px;height:16px;overflow:hidden;min-width:40px}}
+.bfill{{height:100%;background:#1a73e8;border-radius:4px;min-width:2px;transition:width .3s}}
+.ftr{{text-align:center;padding:16px;color:#999;font-size:12px}}
+.nav{{text-align:center;padding:4px 0;font-size:13px}}
+.nav a{{color:#fff;text-decoration:none}}
+.logout{{float:right;color:#fff;text-decoration:none;font-size:13px;opacity:.8}}
+</style></head>
+<body>
+<div class="header"><h1>Relatorios - {shop['name']}</h1>
+<p class="nav">
+  <a href="/dashboard"> Agenda</a> · <a href="/config"> Config</a> {admin_link}
+  <a href="/logout" class="logout">sair</a>
+</p></div>
+<div class="container">
+<div class="stat-grid">
+<div class="stat-card"><div class="n">{stats['total']}</div><div class="l">Total (30 dias)</div></div>
+<div class="stat-card"><div class="n">{stats['scheduled']}</div><div class="l">Confirmados</div></div>
+<div class="stat-card"><div class="n">{stats['cancelled']}</div><div class="l">Cancelados</div></div>
+</div>
+
+<div class="card"><h2> Agendamentos por Dia</h2>
+{"<table><thead><tr><th>Dia</th><th>Qtd</th><th></th></tr></thead><tbody>" + day_rows + "</tbody></table>" if stats['by_day'] else '<p style="color:#999">Nenhum agendamento nos ultimos 30 dias.</p>'}
+</div>
+
+<div class="card"><h2> Servicos mais Populares</h2>
+{"<table><thead><tr><th>Servico</th><th>Qtd</th><th></th></tr></thead><tbody>" + svc_rows + "</tbody></table>" if stats['by_service'] else '<p style="color:#999">Nenhum dado disponivel.</p>'}
+</div>
+
+<div class="card"><h2> Receita por Servico</h2>
+{"<table><thead><tr><th>Servico</th><th>Vezes</th><th>Preco</th><th>Total</th><th></th></tr></thead><tbody>" + rev_rows + "</tbody></table>" if stats['revenue'] else '<p style="color:#999">Nenhum dado disponivel.</p>'}
+</div>
+
+</div>
+<div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
+</body>
+</html>""")
 
 
 # ── Admin API ────────────────────────────────────────────────────
@@ -1181,12 +1348,12 @@ def wa_message_webhook(request: Request):
 
         # If already executed an action and LLM tries another, block it
         if action_executed and action != "reply":
-            result, _ = execute_action(action, params, barbershop_id)
+            result, _ = execute_action(action, params, barbershop_id, wa_number)
             reply = result or msg or "Concluído."
             db.save_message(thread_id, "assistant", reply)
             return {"reply": reply, "barbershop_id": barbershop_id}
 
-        result, created_id = execute_action(action, params, barbershop_id)
+        result, created_id = execute_action(action, params, barbershop_id, wa_number)
 
         if action == "reply" or result is None or iteration == 2:
             reply = msg or result or "Processado."

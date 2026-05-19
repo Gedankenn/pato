@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import bcrypt as _bcrypt
 
 DB_PATH = os.environ.get("PATO_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "pato.db"))
@@ -80,6 +80,11 @@ def _migrate(conn):
     if "price_cents" in svc_cols and "price" not in svc_cols:
         conn.execute("ALTER TABLE services ADD COLUMN price REAL NOT NULL DEFAULT 0.0")
         conn.execute("UPDATE services SET price = price_cents / 100.0 WHERE price_cents > 0")
+    app_cols = [r["name"] for r in conn.execute("PRAGMA table_info(appointments)").fetchall()]
+    if "customer_phone" not in app_cols:
+        conn.execute("ALTER TABLE appointments ADD COLUMN customer_phone TEXT DEFAULT ''")
+    if "reminder_sent" not in app_cols:
+        conn.execute("ALTER TABLE appointments ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_admin(conn):
@@ -143,13 +148,13 @@ def set_whatsapp_number(barbershop_id: int, number: str):
 
 # ── Appointments (scoped by barbershop) ─────────────────────
 
-def create_appointment(barbershop_id, title, description, start_time, end_time):
+def create_appointment(barbershop_id, title, description, start_time, end_time, customer_phone=""):
     now = datetime.utcnow().isoformat()
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO appointments (barbershop_id, title, description, start_time, end_time, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (barbershop_id, title, description, start_time, end_time, now, now),
+            "INSERT INTO appointments (barbershop_id, title, description, start_time, end_time, customer_phone, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (barbershop_id, title, description, start_time, end_time, customer_phone, now, now),
         )
         return cursor.lastrowid
 
@@ -250,6 +255,27 @@ def list_all_barbershops():
         return [dict(r) for r in rows]
 
 
+def get_upcoming_appointments(minutes_start: int = 30, minutes_end: int = 60):
+    """Returns appointments starting in [minutes_start, minutes_end] that haven't been reminded."""
+    now = datetime.utcnow()
+    start_window = (now + timedelta(minutes=minutes_start)).isoformat()
+    end_window = (now + timedelta(minutes=minutes_end)).isoformat()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT a.*, b.whatsapp_number FROM appointments a JOIN barbershops b ON a.barbershop_id = b.id "
+            "WHERE a.status = 'scheduled' AND a.reminder_sent = 0 "
+            "AND a.customer_phone != '' AND a.start_time BETWEEN ? AND ?",
+            (start_window, end_window),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_reminder_sent(appointment_id: int):
+    with get_connection() as conn:
+        conn.execute("UPDATE appointments SET reminder_sent = 1, updated_at = ? WHERE id = ?",
+                     (datetime.utcnow().isoformat(), appointment_id))
+
+
 def list_all_appointments():
     with get_connection() as conn:
         rows = conn.execute("""
@@ -332,4 +358,42 @@ def get_stats():
             "appointments": appointments,
             "scheduled": scheduled,
             "cancelled": cancelled,
+        }
+
+
+def get_barbershop_stats(barbershop_id: int, days: int = 30):
+    with get_connection() as conn:
+        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        total = conn.execute(
+            "SELECT COUNT(*) AS c FROM appointments WHERE barbershop_id = ? AND created_at >= ?",
+            (barbershop_id, since),
+        ).fetchone()["c"]
+        scheduled = conn.execute(
+            "SELECT COUNT(*) AS c FROM appointments WHERE barbershop_id = ? AND status = 'scheduled' AND created_at >= ?",
+            (barbershop_id, since),
+        ).fetchone()["c"]
+        cancelled = conn.execute(
+            "SELECT COUNT(*) AS c FROM appointments WHERE barbershop_id = ? AND status = 'cancelled' AND created_at >= ?",
+            (barbershop_id, since),
+        ).fetchone()["c"]
+        by_service = conn.execute(
+            "SELECT title AS service, COUNT(*) AS count FROM appointments WHERE barbershop_id = ? AND created_at >= ? GROUP BY title ORDER BY count DESC",
+            (barbershop_id, since),
+        ).fetchall()
+        by_day = conn.execute(
+            "SELECT DATE(start_time) AS day, COUNT(*) AS count FROM appointments WHERE barbershop_id = ? AND status = 'scheduled' AND start_time >= ? GROUP BY day ORDER BY day",
+            (barbershop_id, since),
+        ).fetchall()
+        # revenue by service: join with services table
+        revenue = conn.execute(
+            "SELECT a.title AS service, COUNT(*) AS count, COALESCE(s.price, 0) AS price FROM appointments a LEFT JOIN services s ON a.barbershop_id = s.barbershop_id AND LOWER(a.title) = LOWER(s.name) AND s.active = 1 WHERE a.barbershop_id = ? AND a.status = 'scheduled' AND a.start_time >= ? GROUP BY a.title ORDER BY count DESC",
+            (barbershop_id, since),
+        ).fetchall()
+        return {
+            "total": total,
+            "scheduled": scheduled,
+            "cancelled": cancelled,
+            "by_service": [dict(r) for r in by_service],
+            "by_day": [dict(r) for r in by_day],
+            "revenue": [{"service": r["service"], "count": r["count"], "price": r["price"], "total": r["count"] * r["price"]} for r in revenue],
         }
