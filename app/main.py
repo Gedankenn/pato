@@ -1087,6 +1087,128 @@ def wa_message_webhook(request: Request):
     return {"reply": "Desculpe, não consegui processar. Pode repetir?", "barbershop_id": barbershop_id}
 
 
+# ── Demo: PatoBarba WhatsApp Simulator ────────────────────────────
+
+DEMO_EMAIL = "demo@patobarba.com"
+
+@app.post("/demo/login")
+def demo_login():
+    shop = db.verify_password(DEMO_EMAIL, "patobarba123")
+    if not shop:
+        shop = db.create_barbershop("PatoBarba", DEMO_EMAIL, "patobarba123")
+        if not shop:
+            raise HTTPException(status_code=500, detail="Failed to create demo")
+        for name, dur, price in [
+            ("Corte de Cabelo", 45, 50.0),
+            ("Barba", 20, 30.0),
+            ("Corte + Barba", 60, 80.0),
+            ("Hidratação", 30, 40.0),
+            ("Sobrancelha", 15, 20.0),
+        ]:
+            db.create_service(shop["id"], name, dur, price)
+    token = create_token(shop["id"])
+    return {"token": token, "barbershop_id": shop["id"], "name": shop["name"]}
+
+
+WA_DEMO_PAGE = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>PatoBarba</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#111;height:100vh;display:flex;align-items:center;justify-content:center}
+#app{width:100%;max-width:480px;height:100vh;max-height:820px;display:flex;flex-direction:column;background:#efeae2;position:relative;overflow:hidden}
+.hdr{background:#075e54;color:#fff;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.hdr img{width:40px;height:40px;border-radius:50%;background:#128c7e;padding:6px}
+.hdr .nm{flex:1}
+.hdr .nm b{font-size:16px;display:block}
+.hdr .nm small{font-size:12px;opacity:.8}
+.hdr .icn{display:flex;gap:6px}
+.hdr .icn svg{width:22px;height:22px;fill:#fff;opacity:.8;cursor:pointer}
+.chat{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:4px;background:#e5ddd5}
+.chat .dt{text-align:center;font-size:12px;color:#888;margin:8px 0 4px;background:#e1f3fb;display:inline-block;padding:4px 12px;border-radius:6px;align-self:center}
+.bbl{max-width:88%;padding:8px 12px;border-radius:8px;font-size:14.5px;line-height:1.45;position:relative;word-wrap:break-word;white-space:pre-wrap;animation:fadeIn .2s}
+.bbl p{margin:0}
+.bbl .tm{font-size:11px;color:#999;text-align:right;margin-top:4px;display:flex;align-items:center;justify-content:flex-end;gap:3px}
+.bbl.user{background:#dcf8c6;align-self:flex-end;border-bottom-right-radius:3px}
+.bbl.user .tm{color:#839a7a}
+.bbl.ai{background:#fff;align-self:flex-start;border-bottom-left-radius:3px}
+.bbl.ai .tm{color:#999}
+.bbl .dd{font-size:10px;color:#53bdeb;margin-left:2px}
+.inp{background:#f0f2f5;padding:8px 10px;display:flex;gap:6px;align-items:center;flex-shrink:0}
+.inp input{flex:1;padding:10px 16px;border:none;border-radius:24px;outline:none;font-size:15px;background:#fff}
+.inp button{width:44px;height:44px;border:none;border-radius:50%;background:#128c7e;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s}
+.inp button:active{background:#075e54}
+.inp button:disabled{opacity:.4}
+.typing{display:flex;gap:5px;padding:12px 16px;background:#fff;border-radius:8px;align-self:flex-start;margin-bottom:4px}
+.typing span{width:8px;height:8px;background:#999;border-radius:50%;animation:bounce 1.4s infinite}
+.typing span:nth-child(2){animation-delay:.2s}
+.typing span:nth-child(3){animation-delay:.4s}
+@keyframes bounce{0%,80%,100%{transform:scale(.6)}40%{transform:scale(1)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.sc{display:flex;align-items:center;justify-content:center;height:100%;color:#999;flex-direction:column;gap:10px;text-align:center;padding:20px}
+.sc svg{width:60px;height:60px;fill:#ddd}
+</style>
+</head>
+<body>
+<div id="app">
+<div class="hdr">
+<img src="/static/logo.png" alt="P">
+<div class="nm"><b>PatoBarba</b><small>online</small></div>
+<div class="icn">
+<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+<svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+</div>
+</div>
+<div class="chat" id="chat"><div class="sc"><svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>Conectando...</div></div>
+<div class="inp">
+<input id="inp" placeholder="Digite sua mensagem" autofocus>
+<button id="btn" onclick="send()"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M1.101 21.757L23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"/></svg></button>
+</div>
+</div>
+<script>
+let tok=localStorage.getItem('patobarba_token'),tid=localStorage.getItem('patobarba_tid'),chatEl=document.getElementById('chat'),inp=document.getElementById('inp'),btn=document.getElementById('btn');
+function esc(s){const d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
+function tm(){const d=new Date();return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')}
+function addMsg(text,role){
+const d=document.createElement('div');d.className='bbl '+role;
+d.innerHTML='<p>'+esc(text)+'</p><div class="tm">'+tm()+(role==='user'?'<span class="dd">✓✓</span>':'')+'</div>';
+chatEl.appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'});
+localStorage.setItem('patobarba_msgs',JSON.stringify([...document.querySelectorAll('.bbl')].map(m=>({t:m.querySelector('p').textContent,r:m.classList.contains('user')?'user':'ai',h:m.querySelector('.tm').textContent.trim()}))));
+}
+function typing(on){const e=chatEl.querySelector('.typing');if(on&&!e){const d=document.createElement('div');d.className='typing';d.innerHTML='<span></span><span></span><span></span>';chatEl.appendChild(d);d.scrollIntoView({behavior:'smooth',block:'end'})}else if(!on&&e)e.remove()}
+function loadMsgs(){try{const m=JSON.parse(localStorage.getItem('patobarba_msgs')||'[]');m.forEach(x=>{const d=document.createElement('div');d.className='bbl '+x.r;d.innerHTML='<p>'+esc(x.t)+'</p><div class="tm">'+esc(x.h)+'</div>';chatEl.appendChild(d)});document.querySelector('.sc')?.remove()}catch(e){}}
+loadMsgs();
+async function send(){
+const text=inp.value.trim();if(!text||btn.disabled)return;
+inp.value='';btn.disabled=true;
+addMsg(text,'user');typing(true);
+try{
+const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({message:text,thread_id:tid||null})});
+const d=await res.json();
+if(d.thread_id){tid=d.thread_id;localStorage.setItem('patobarba_tid',tid)}
+typing(false);
+if(d.reply)addMsg(d.reply,'ai');
+else addMsg('(sem resposta)','ai');
+}catch(e){typing(false);addMsg('Erro de conexão.','ai')}
+btn.disabled=false;inp.focus();
+}
+inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
+if(!tok){
+fetch('/demo/login',{method:'POST'}).then(r=>r.json()).then(d=>{tok=d.token;localStorage.setItem('patobarba_token',tok);document.querySelector('.sc')&&(document.querySelector('.sc').innerHTML='<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.17L4 17.17V4h16v12z"/><path d="M7 9h2v2H7zm4 0h2v2h-2zm4 0h2v2h-2z"/></svg>Olá! Como posso ajudar? 💈'});
+}
+</script>
+</body>
+</html>"""
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def demo_page():
+    return HTMLResponse(WA_DEMO_PAGE)
+
+
 # ── Redirect root to login ──────────────────────────────────────
 
 @app.get("/")
