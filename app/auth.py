@@ -1,11 +1,11 @@
 import os
 import jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import Header, HTTPException, Request
 
 from app import database as db
 
-SECRET = os.environ.get("JWT_SECRET", "pato-dev-secret-change-in-production")
+SECRET = os.environ.get("JWT_SECRET", "change-this-in-production-REPLACE-ME")
 ALGO = "HS256"
 
 
@@ -14,7 +14,7 @@ def create_token(barbershop_id: int) -> str:
     payload = {
         "barbershop_id": barbershop_id,
         "is_admin": shop.get("is_admin", 0) if shop else 0,
-        "exp": datetime.utcnow() + timedelta(days=30),
+        "exp": datetime.now(timezone.utc) + timedelta(days=30),
     }
     return jwt.encode(payload, SECRET, algorithm=ALGO)
 

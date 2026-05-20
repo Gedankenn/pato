@@ -1,6 +1,9 @@
 import sqlite3
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+def _now_iso():
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
 import bcrypt as _bcrypt
 
 DB_PATH = os.environ.get("PATO_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "pato.db"))
@@ -109,7 +112,7 @@ def _ensure_admin(conn):
     if existing:
         conn.execute("UPDATE barbershops SET is_admin = 1 WHERE id = ?", (existing["id"],))
     else:
-        now = datetime.utcnow().isoformat()
+        now = _now_iso()
         password_hash = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
         conn.execute(
             "INSERT INTO barbershops (name, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, 1, ?)",
@@ -120,7 +123,7 @@ def _ensure_admin(conn):
 # ── Barbershops ──────────────────────────────────────────────
 
 def create_barbershop(name: str, email: str, password: str, business_type: str = "barbearia") -> dict | None:
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     password_hash = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
     try:
         with get_connection() as conn:
@@ -181,7 +184,7 @@ def update_barbershop(barbershop_id: int, name: str | None = None, business_type
 # ── Appointments (scoped by barbershop) ─────────────────────
 
 def create_appointment(barbershop_id, title, description, start_time, end_time, customer_phone="", staff_id=None):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     with get_connection() as conn:
         cursor = conn.execute(
             "INSERT INTO appointments (barbershop_id, title, description, start_time, end_time, customer_phone, staff_id, created_at, updated_at) "
@@ -218,7 +221,7 @@ def get_appointment(barbershop_id, appointment_id):
 
 
 def reschedule_appointment(barbershop_id, appointment_id, new_start_time, new_end_time):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     with get_connection() as conn:
         cursor = conn.execute(
             "UPDATE appointments SET start_time = ?, end_time = ?, status = 'rescheduled', updated_at = ? "
@@ -229,7 +232,7 @@ def reschedule_appointment(barbershop_id, appointment_id, new_start_time, new_en
 
 
 def cancel_appointment(barbershop_id, appointment_id):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     with get_connection() as conn:
         cursor = conn.execute(
             "UPDATE appointments SET status = 'cancelled', updated_at = ? WHERE id = ? AND barbershop_id = ?",
@@ -241,7 +244,7 @@ def cancel_appointment(barbershop_id, appointment_id):
 # ── Conversations ─────────────────────────────────────────────
 
 def save_message(thread_id: str, role: str, content: str):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO conversations (thread_id, role, content, created_at) VALUES (?, ?, ?, ?)",
@@ -261,7 +264,7 @@ def get_conversation(thread_id: str, limit: int = 10):
 
 
 def update_appointment(barbershop_id, appointment_id, title=None, description=None):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     parts = ["updated_at = ?"]
     vals = [now]
     if title is not None:
@@ -291,7 +294,7 @@ def list_all_barbershops():
 
 def get_tomorrow_appointments():
     """Returns appointments for tomorrow that haven't been reminded yet."""
-    tomorrow = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
+    tomorrow = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=1)).strftime("%Y-%m-%d")
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT a.*, b.whatsapp_number FROM appointments a JOIN barbershops b ON a.barbershop_id = b.id "
@@ -305,7 +308,7 @@ def get_tomorrow_appointments():
 def mark_reminder_sent(appointment_id: int):
     with get_connection() as conn:
         conn.execute("UPDATE appointments SET reminder_sent = 1, updated_at = ? WHERE id = ?",
-                     (datetime.utcnow().isoformat(), appointment_id))
+                     (_now_iso(), appointment_id))
 
 
 def list_all_appointments():
@@ -333,7 +336,7 @@ def list_services(barbershop_id: int, active_only: bool = True):
 
 
 def create_service(barbershop_id: int, name: str, duration_minutes: int, price: float):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     with get_connection() as conn:
         cursor = conn.execute(
             "INSERT INTO services (barbershop_id, name, duration_minutes, price, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -405,7 +408,7 @@ def get_stats():
 
 def get_barbershop_stats(barbershop_id: int, days: int = 30):
     with get_connection() as conn:
-        since = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        since = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)).isoformat()
         total = conn.execute(
             "SELECT COUNT(*) AS c FROM appointments WHERE barbershop_id = ? AND created_at >= ?",
             (barbershop_id, since),
@@ -455,7 +458,7 @@ def list_staff(barbershop_id: int, active_only: bool = True):
 
 
 def create_staff(barbershop_id: int, name: str):
-    now = datetime.utcnow().isoformat()
+    now = _now_iso()
     with get_connection() as conn:
         cursor = conn.execute(
             "INSERT INTO staff (barbershop_id, name, created_at) VALUES (?, ?, ?)",

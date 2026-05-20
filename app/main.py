@@ -1,10 +1,10 @@
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import httpx
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 load_dotenv()
 
@@ -40,12 +40,14 @@ app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-WEBHOOK_VERIFY_TOKEN = os.environ.get("WEBHOOK_VERIFY_TOKEN", "pato123")
+WEBHOOK_VERIFY_TOKEN = os.environ.get("WEBHOOK_VERIFY_TOKEN") or os.urandom(16).hex()
+if not os.environ.get("WEBHOOK_VERIFY_TOKEN"):
+    print(f"[webhook] WEBHOOK_VERIFY_TOKEN not set — generated random: {WEBHOOK_VERIFY_TOKEN}")
 WHATSAPP_DATA_DIR = os.environ.get(
     "WHATSAPP_DATA_DIR",
     os.path.join(os.path.dirname(__file__), "..", "whatsapp", "data"),
@@ -58,7 +60,7 @@ def get_openai():
     kwargs = {"api_key": api_key, "timeout": 300}
     if base_url:
         kwargs["base_url"] = base_url
-    return OpenAI(**kwargs)
+    return AsyncOpenAI(**kwargs)
 
 
 LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
@@ -144,6 +146,16 @@ def execute_action(action: str, params: dict, barbershop_id: int, customer_phone
         description = params.get("description", "").strip()
         if not description:
             return "description (nome do cliente) is required. Ask who the appointment is for.", None
+
+        # Double-booking check: same staff, overlapping time
+        existing = db.list_appointments(barbershop_id, status="scheduled")
+        for a in existing:
+            if a["start_time"] < end and start < a["end_time"]:
+                if staff_id and a.get("staff_id") == staff_id:
+                    return f"Horário já reservado para {a['staff_name'] or 'este funcionário'} nesse período ({a['start_time'][11:16]}-{a['end_time'][11:16]}). Escolha outro horário.", None
+                if not staff_id and not a.get("staff_id"):
+                    return f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]}). Escolha outro horário.", None
+
         appt_id = db.create_appointment(
             barbershop_id=barbershop_id,
             title=title,
@@ -241,13 +253,16 @@ def extract_json(text: str) -> dict | None:
     return None
 
 
-def call_llm(messages: list) -> str:
-    response = get_openai().chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
-        temperature=0.1,
-    )
-    return response.choices[0].message.content or ""
+async def call_llm(messages: list) -> str:
+    try:
+        response = await get_openai().chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            temperature=0.1,
+        )
+        return response.choices[0].message.content or ""
+    except Exception:
+        return ""
 
 
 def get_wa_status_dir(barbershop_id: int) -> str:
@@ -271,7 +286,7 @@ def login(body: LoginRequest):
         "whatsapp_number": shop.get("whatsapp_number"),
         "is_admin": shop.get("is_admin", 0),
     })
-    resp.set_cookie(key="token", value=token, httponly=False, max_age=2592000, path="/")
+    resp.set_cookie(key="token", value=token, httponly=True, max_age=2592000, path="/")
     return resp
 
 
@@ -288,13 +303,23 @@ def register(body: RegisterRequest):
         "name": shop["name"],
         "email": shop["email"],
     })
-    resp.set_cookie(key="token", value=token, httponly=False, max_age=2592000, path="/")
+    resp.set_cookie(key="token", value=token, httponly=True, max_age=2592000, path="/")
     return resp
 
 
 # ── Chat ────────────────────────────────────────────────────────
 
+import threading
 _last_appointment: dict[str, int] = {}
+_last_lock = threading.Lock()
+
+
+def _load_json(path: str) -> dict:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _header_html(shop_name: str, page: str, is_admin: bool = False) -> str:
@@ -387,19 +412,22 @@ def _build_prompt(barbershop_id: int, thread_id: str | None = None) -> str:
         names = ", ".join(s["name"] for s in staff_list)
         ids = ", ".join(f'{s["name"]} (id={s["id"]})' for s in staff_list)
         base += f"\n\nFUNCIONÁRIOS DISPONÍVEIS: {ids}\n\nSEMPRE inclua staff_id no create_appointment. Pergunte ao cliente qual funcionário prefere. Se o cliente não tiver preferência, escolha um aleatório e informe qual foi. NUNCA crie agendamento sem staff_id."
-    if thread_id and thread_id in _last_appointment:
-        a = db.get_appointment(barbershop_id, _last_appointment[thread_id])
-        if a and a["status"] == "scheduled":
-            base += f"\n\núltimo agendamento deste cliente: #{a['id']} ({a['title']} às {a['start_time'][:16]})."
+    if thread_id:
+        with _last_lock:
+            aid = _last_appointment.get(thread_id)
+        if aid:
+            a = db.get_appointment(barbershop_id, aid)
+            if a and a["status"] == "scheduled":
+                base += f"\n\núltimo agendamento deste cliente: #{a['id']} ({a['title']} às {a['start_time'][:16]})."
     return base
 
 
 @app.post("/chat", response_model=MessageResponse)
-def chat(
+async def chat(
     request: MessageRequest,
     barbershop_id: int = Depends(get_current_barbershop_id),
 ):
-    thread_id = request.thread_id or f"thread_{datetime.utcnow().timestamp()}"
+    thread_id = request.thread_id or f"thread_{datetime.now(timezone.utc).replace(tzinfo=None).timestamp()}"
 
     resolved = _resolve_dates(request.message)
     db.save_message(thread_id, "user", resolved)
@@ -411,7 +439,7 @@ def chat(
     action_executed = False
 
     for iteration in range(3):
-        raw = call_llm(history)
+        raw = await call_llm(history)
         parsed = extract_json(raw)
 
         if not parsed or not isinstance(parsed, dict):
@@ -463,7 +491,8 @@ def chat(
         action_executed = True
 
         if created_id:
-            _last_appointment[thread_id] = created_id
+            with _last_lock:
+                _last_appointment[thread_id] = created_id
             a = db.get_appointment(barbershop_id, created_id)
             history.append({
                 "role": "system",
@@ -478,7 +507,6 @@ def chat(
         })
     # Fallback if loop exhausts without returning
     db.save_message(thread_id, "assistant", "Desculpe, não consegui processar. Pode repetir?")
-    return MessageResponse(reply="Desculpe, não consegui processar. Pode repetir?", thread_id=thread_id)
     return MessageResponse(reply="Desculpe, não consegui processar. Pode repetir?", thread_id=thread_id)
 
 
@@ -514,6 +542,16 @@ def create_appointment(
         if active_staff:
             import random
             staff_id = random.choice(active_staff)["id"]
+
+    # Double-booking check
+    existing = db.list_appointments(barbershop_id, status="scheduled")
+    for a in existing:
+        if a["start_time"] < body.end_time and body.start_time < a["end_time"]:
+            if staff_id and a.get("staff_id") == staff_id:
+                raise HTTPException(status_code=409, detail=f"Horário já reservado para {a['staff_name'] or 'este funcionário'} ({a['start_time'][11:16]}-{a['end_time'][11:16]})")
+            if not staff_id and not a.get("staff_id"):
+                raise HTTPException(status_code=409, detail=f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]})")
+
     appt_id = db.create_appointment(
         barbershop_id=barbershop_id,
         title=body.title,
@@ -645,7 +683,7 @@ def get_qrcode(barbershop_id: int = Depends(get_current_barbershop_id)):
 def get_whatsapp_status(barbershop_id: int = Depends(get_current_barbershop_id)):
     status_path = os.path.join(get_wa_status_dir(barbershop_id), "status.json")
     if os.path.exists(status_path):
-        return JSONResponse(json.load(open(status_path)))
+        return JSONResponse(_load_json(status_path))
     return JSONResponse({"status": "inactive"})
 
 
@@ -669,7 +707,7 @@ def admin_start_whatsapp(barbershop_id: int, _=Depends(require_admin)):
 def admin_whatsapp_status(barbershop_id: int, _=Depends(require_admin)):
     status_path = os.path.join(get_wa_status_dir(barbershop_id), "status.json")
     if os.path.exists(status_path):
-        return JSONResponse(json.load(open(status_path)))
+        return JSONResponse(_load_json(status_path))
     return JSONResponse({"status": "inactive"})
 
 
@@ -694,7 +732,7 @@ def dashboard(request: Request, week: str = Query(None)):
     status_path = os.path.join(get_wa_status_dir(barbershop_id), "status.json")
     wa_status = "inactive"
     if os.path.exists(status_path):
-        wa_status = json.load(open(status_path)).get("status", "inactive")
+        wa_status = _load_json(status_path).get("status", "inactive")
 
     app_json = json.dumps(appointments)
 
@@ -1488,7 +1526,6 @@ const data=await res.json();
 if(!res.ok){document.getElementById(t+'Error').textContent=data.detail||'Erro';document.getElementById(t+'Error').style.display='block';return}
 localStorage.setItem('token',data.token);localStorage.setItem('name',data.name);window.location.href=data.is_admin?'/admin':'/dashboard'
 }catch(e){document.getElementById(t+'Error').textContent='Erro de conexão com o servidor';document.getElementById(t+'Error').style.display='block'}}
-if(localStorage.getItem('token')){window.location.href='/dashboard'}
 </script>
 <div style="text-align:center;padding:20px;color:#999;font-size:13px;margin-top:20px">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 </body>
@@ -1530,9 +1567,9 @@ def update_barbershop(body: BarbershopUpdate, barbershop_id: int = Depends(get_c
 # ── Webhook (WhatsApp Manager → Backend) ───────────────────────
 
 @app.post("/webhook/wa-message")
-def wa_message_webhook(request: Request):
+async def wa_message_webhook(request: Request):
     """Recebe mensagens do WhatsApp Manager (Node.js)"""
-    body = request.json()
+    body = await request.json()
     wa_number = body.get("from")
     text = body.get("text", "")
     barbershop_id = body.get("barbershop_id")
@@ -1552,7 +1589,7 @@ def wa_message_webhook(request: Request):
     action_executed = False
 
     for iteration in range(3):
-        raw = call_llm(history)
+        raw = await call_llm(history)
         parsed = extract_json(raw)
         if not parsed:
             reply = "Desculpe, não entendi. Pode repetir?"
@@ -1597,7 +1634,8 @@ def wa_message_webhook(request: Request):
         action_executed = True
 
         if created_id:
-            _last_appointment[thread_id] = created_id
+            with _last_lock:
+                _last_appointment[thread_id] = created_id
             a = db.get_appointment(barbershop_id, created_id)
             history.append({
                 "role": "system",
@@ -1618,7 +1656,7 @@ def wa_message_webhook(request: Request):
 DEMO_EMAIL = "demo@patobarba.com"
 
 @app.post("/demo/login")
-def demo_login():
+def demo_login(request: Request):
     shop = db.verify_password(DEMO_EMAIL, "patobarba123")
     if not shop:
         shop = db.create_barbershop("PatoBarba", DEMO_EMAIL, "patobarba123", business_type="barbearia")
@@ -1741,6 +1779,7 @@ inp.value='';btn.disabled=true;
 addMsg(text,'user');typing(true);
 try{
 var res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({message:text,thread_id:tid||null})});
+if(res.status===401){tok=null;localStorage.removeItem('patobarba_token');typing(false);addMsg('Sessao expirada. Recarregue a pagina.','ai');btn.disabled=false;return}
 var d=await res.json();
 if(d.thread_id){tid=d.thread_id;localStorage.setItem('patobarba_tid',tid)}
 typing(false);
@@ -1756,12 +1795,15 @@ var wlcm=document.getElementById('welcome');
 if(tok&&tok!=='null'&&tok!=='undefined'){
 connected();
 }else{
-fetch('/demo/login',{method:'POST'}).then(function(r){return r.json()}).then(function(d){
-tok=d.token;localStorage.setItem('patobarba_token',tok);
-connected();
-}).catch(function(){
-st.textContent='erro de conex\u00e3o';st.style.color='#ff6b6b';
-wl.textContent='N\u00e3o foi poss\u00edvel conectar. Recarregue a p\u00e1gina.';
+fetch('/demo/login',{method:'POST'}).then(function(r){
+  if(!r.ok)throw new Error(r.status);
+  return r.json()
+}).then(function(d){
+  tok=d.token;localStorage.setItem('patobarba_token',tok);
+  connected();
+}).catch(function(e){
+  st.textContent='erro de conexao';st.style.color='#ff6b6b';
+  wl.textContent='Nao foi possivel conectar. Recarregue a pagina.';
 })
 }
 })();
@@ -1791,7 +1833,7 @@ def verify_webhook(
     hub_challenge: str = Query(None, alias="hub.challenge"),
 ):
     if hub_mode == "subscribe" and hub_token == WEBHOOK_VERIFY_TOKEN:
-        return int(hub_challenge) if hub_challenge else "ok"
+        return hub_challenge or "ok"
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
