@@ -68,6 +68,16 @@ def init_db():
                 FOREIGN KEY (barbershop_id) REFERENCES barbershops(id)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS staff (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                barbershop_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (barbershop_id) REFERENCES barbershops(id)
+            )
+        """)
         _migrate(conn)
         _ensure_admin(conn)
 
@@ -85,6 +95,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE appointments ADD COLUMN customer_phone TEXT DEFAULT ''")
     if "reminder_sent" not in app_cols:
         conn.execute("ALTER TABLE appointments ADD COLUMN reminder_sent INTEGER NOT NULL DEFAULT 0")
+    if "staff_id" not in app_cols:
+        conn.execute("ALTER TABLE appointments ADD COLUMN staff_id INTEGER DEFAULT NULL REFERENCES staff(id)")
     shop_cols = [r["name"] for r in conn.execute("PRAGMA table_info(barbershops)").fetchall()]
     if "business_type" not in shop_cols:
         conn.execute("ALTER TABLE barbershops ADD COLUMN business_type TEXT NOT NULL DEFAULT 'barbearia'")
@@ -168,36 +180,38 @@ def update_barbershop(barbershop_id: int, name: str | None = None, business_type
 
 # ── Appointments (scoped by barbershop) ─────────────────────
 
-def create_appointment(barbershop_id, title, description, start_time, end_time, customer_phone=""):
+def create_appointment(barbershop_id, title, description, start_time, end_time, customer_phone="", staff_id=None):
     now = datetime.utcnow().isoformat()
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO appointments (barbershop_id, title, description, start_time, end_time, customer_phone, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (barbershop_id, title, description, start_time, end_time, customer_phone, now, now),
+            "INSERT INTO appointments (barbershop_id, title, description, start_time, end_time, customer_phone, staff_id, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (barbershop_id, title, description, start_time, end_time, customer_phone, staff_id, now, now),
         )
         return cursor.lastrowid
 
 
 def list_appointments(barbershop_id, status=None):
     with get_connection() as conn:
+        query = """
+            SELECT a.*, s.name AS staff_name
+            FROM appointments a
+            LEFT JOIN staff s ON a.staff_id = s.id
+            WHERE a.barbershop_id = ?
+        """
+        params = [barbershop_id]
         if status:
-            rows = conn.execute(
-                "SELECT * FROM appointments WHERE barbershop_id = ? AND status = ? ORDER BY start_time",
-                (barbershop_id, status),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM appointments WHERE barbershop_id = ? ORDER BY start_time",
-                (barbershop_id,),
-            ).fetchall()
+            query += " AND a.status = ?"
+            params.append(status)
+        query += " ORDER BY a.start_time"
+        rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_appointment(barbershop_id, appointment_id):
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM appointments WHERE id = ? AND barbershop_id = ?",
+            "SELECT a.*, s.name AS staff_name FROM appointments a LEFT JOIN staff s ON a.staff_id = s.id WHERE a.id = ? AND a.barbershop_id = ?",
             (appointment_id, barbershop_id),
         ).fetchone()
         return dict(row) if row else None
@@ -365,6 +379,16 @@ def delete_service(service_id: int, barbershop_id: int):
         return cursor.rowcount > 0
 
 
+def delete_barbershop(barbershop_id: int):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM appointments WHERE barbershop_id = ?", (barbershop_id,))
+        conn.execute("DELETE FROM services WHERE barbershop_id = ?", (barbershop_id,))
+        conn.execute("DELETE FROM staff WHERE barbershop_id = ?", (barbershop_id,))
+        conn.execute("DELETE FROM conversations WHERE thread_id IN (SELECT thread_id FROM conversations WHERE thread_id LIKE ?)", (f"%_{barbershop_id}",))
+        cursor = conn.execute("DELETE FROM barbershops WHERE id = ?", (barbershop_id,))
+        return cursor.rowcount > 0
+
+
 def get_stats():
     with get_connection() as conn:
         shops = conn.execute("SELECT COUNT(*) AS c FROM barbershops").fetchone()["c"]
@@ -415,3 +439,53 @@ def get_barbershop_stats(barbershop_id: int, days: int = 30):
             "by_day": [dict(r) for r in by_day],
             "revenue": [{"service": r["service"], "count": r["count"], "price": r["price"], "total": r["count"] * r["price"]} for r in revenue],
         }
+
+
+# ── Staff ──────────────────────────────────────────────────
+
+def list_staff(barbershop_id: int, active_only: bool = True):
+    with get_connection() as conn:
+        query = "SELECT * FROM staff WHERE barbershop_id = ?"
+        params = [barbershop_id]
+        if active_only:
+            query += " AND active = 1"
+        query += " ORDER BY name"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_staff(barbershop_id: int, name: str):
+    now = datetime.utcnow().isoformat()
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO staff (barbershop_id, name, created_at) VALUES (?, ?, ?)",
+            (barbershop_id, name, now),
+        )
+        return cursor.lastrowid
+
+
+def update_staff(staff_id: int, barbershop_id: int, name: str | None = None, active: bool | None = None):
+    parts = []
+    vals = []
+    if name is not None:
+        parts.append("name = ?")
+        vals.append(name)
+    if active is not None:
+        parts.append("active = ?")
+        vals.append(1 if active else 0)
+    if not parts:
+        return False
+    vals += [staff_id, barbershop_id]
+    with get_connection() as conn:
+        cursor = conn.execute(
+            f"UPDATE staff SET {', '.join(parts)} WHERE id = ? AND barbershop_id = ?", vals
+        )
+        return cursor.rowcount > 0
+
+
+def delete_staff(staff_id: int, barbershop_id: int):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM staff WHERE id = ? AND barbershop_id = ?", (staff_id, barbershop_id)
+        )
+        return cursor.rowcount > 0

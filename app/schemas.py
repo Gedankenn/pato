@@ -7,6 +7,7 @@ class AppointmentCreate(BaseModel):
     description: str = ""
     start_time: str
     end_time: str
+    staff_id: Optional[int] = None
 
 
 class AppointmentReschedule(BaseModel):
@@ -25,6 +26,8 @@ class AppointmentResponse(BaseModel):
     status: str
     created_at: str
     updated_at: str
+    staff_id: Optional[int] = None
+    staff_name: Optional[str] = None
 
 
 class MessageRequest(BaseModel):
@@ -83,3 +86,22 @@ class AuthResponse(BaseModel):
     name: str
     email: str
     whatsapp_number: Optional[str] = None
+
+
+# ── Staff ──────────────────────────────────────────────────
+
+class StaffCreate(BaseModel):
+    name: str
+
+
+class StaffUpdate(BaseModel):
+    name: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class StaffResponse(BaseModel):
+    id: int
+    barbershop_id: int
+    name: str
+    active: bool
+    created_at: str

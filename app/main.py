@@ -24,6 +24,9 @@ from app.schemas import (
     ServiceCreate,
     ServiceUpdate,
     ServiceResponse,
+    StaffCreate,
+    StaffUpdate,
+    StaffResponse,
 )
 from pydantic import BaseModel
 from app import database as db
@@ -114,8 +117,9 @@ def _reminder_loop():
 
 def format_appointment(a: dict) -> str:
     name = f" ({a['description']})" if a.get('description') else ""
+    staff = f" com {a['staff_name']}" if a.get('staff_name') else ""
     return (
-        f"[#{a['id']}] {a['title']}{name} - {a['start_time']} to {a['end_time']} "
+        f"[#{a['id']}] {a['title']}{name}{staff} - {a['start_time']} to {a['end_time']} "
         f"({a['status']})"
     )
 
@@ -129,13 +133,25 @@ def execute_action(action: str, params: dict, barbershop_id: int, customer_phone
         end = params.get("end_time")
         if not start or not end:
             return "start_time and end_time are required. Ask the customer when they want to book.", None
+        if "2025" in start or "AAAA" in start or "YYYY" in start:
+            return "Invalid date — you copied the example. Use the actual date and time the customer requested (format: 2026-05-20T13:00).", None
+        staff_id = params.get("staff_id")
+        if not staff_id:
+            active_staff = db.list_staff(barbershop_id, active_only=True)
+            if active_staff:
+                import random
+                staff_id = random.choice(active_staff)["id"]
+        description = params.get("description", "").strip()
+        if not description:
+            return "description (nome do cliente) is required. Ask who the appointment is for.", None
         appt_id = db.create_appointment(
             barbershop_id=barbershop_id,
             title=title,
-            description=params.get("description", ""),
+            description=description,
             start_time=start,
             end_time=end,
             customer_phone=customer_phone,
+            staff_id=staff_id,
         )
         a = db.get_appointment(barbershop_id, appt_id)
         return f"Created: {format_appointment(a)}", appt_id
@@ -366,6 +382,11 @@ def _build_prompt(barbershop_id: int, thread_id: str | None = None) -> str:
             for s in services
         )
         base += f"\n\nSERVIÇOS OFERECIDOS:\n{lines}\n\nUse esta lista para informar preços e durações quando o cliente perguntar."
+    staff_list = db.list_staff(barbershop_id, active_only=True)
+    if staff_list:
+        names = ", ".join(s["name"] for s in staff_list)
+        ids = ", ".join(f'{s["name"]} (id={s["id"]})' for s in staff_list)
+        base += f"\n\nFUNCIONÁRIOS DISPONÍVEIS: {ids}\n\nSEMPRE inclua staff_id no create_appointment. Pergunte ao cliente qual funcionário prefere. Se o cliente não tiver preferência, escolha um aleatório e informe qual foi. NUNCA crie agendamento sem staff_id."
     if thread_id and thread_id in _last_appointment:
         a = db.get_appointment(barbershop_id, _last_appointment[thread_id])
         if a and a["status"] == "scheduled":
@@ -487,12 +508,19 @@ def create_appointment(
     body: AppointmentCreate,
     barbershop_id: int = Depends(get_current_barbershop_id),
 ):
+    staff_id = body.staff_id
+    if not staff_id:
+        active_staff = db.list_staff(barbershop_id, active_only=True)
+        if active_staff:
+            import random
+            staff_id = random.choice(active_staff)["id"]
     appt_id = db.create_appointment(
         barbershop_id=barbershop_id,
         title=body.title,
         description=body.description,
         start_time=body.start_time,
         end_time=body.end_time,
+        staff_id=staff_id,
     )
     return db.get_appointment(barbershop_id, appt_id)
 
@@ -572,6 +600,37 @@ def delete_service(
     return {"ok": True}
 
 
+# ── Staff (scoped) ──────────────────────────────────────────
+
+@app.get("/staff", response_model=list[StaffResponse])
+def list_staff(barbershop_id: int = Depends(get_current_barbershop_id)):
+    return [{"id": s["id"], "barbershop_id": s["barbershop_id"], "name": s["name"], "active": bool(s["active"]), "created_at": s["created_at"]} for s in db.list_staff(barbershop_id, active_only=False)]
+
+
+@app.post("/staff", response_model=StaffResponse)
+def create_staff(body: StaffCreate, barbershop_id: int = Depends(get_current_barbershop_id)):
+    sid = db.create_staff(barbershop_id, body.name)
+    row = db.get_connection().execute("SELECT * FROM staff WHERE id = ?", (sid,)).fetchone()
+    return {"id": row["id"], "barbershop_id": row["barbershop_id"], "name": row["name"], "active": bool(row["active"]), "created_at": row["created_at"]}
+
+
+@app.put("/staff/{staff_id}", response_model=StaffResponse)
+def update_staff(staff_id: int, body: StaffUpdate, barbershop_id: int = Depends(get_current_barbershop_id)):
+    ok = db.update_staff(staff_id, barbershop_id, name=body.name, active=body.active)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    row = db.get_connection().execute("SELECT * FROM staff WHERE id = ?", (staff_id,)).fetchone()
+    return {"id": row["id"], "barbershop_id": row["barbershop_id"], "name": row["name"], "active": bool(row["active"]), "created_at": row["created_at"]}
+
+
+@app.delete("/staff/{staff_id}")
+def delete_staff(staff_id: int, barbershop_id: int = Depends(get_current_barbershop_id)):
+    ok = db.delete_staff(staff_id, barbershop_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    return {"ok": True}
+
+
 # ── WhatsApp Status (scoped) ────────────────────────────────────
 
 @app.get("/whatsapp/qrcode")
@@ -638,6 +697,9 @@ def dashboard(request: Request, week: str = Query(None)):
         wa_status = json.load(open(status_path)).get("status", "inactive")
 
     app_json = json.dumps(appointments)
+
+    staff_list = db.list_staff(barbershop_id, active_only=True)
+    staff_json = json.dumps([{"id": s["id"], "name": s["name"]} for s in staff_list])
 
     today = datetime.now()
     if week:
@@ -746,19 +808,25 @@ const COLORS = ["#1a73e8","#e37400","#1e7e34","#9334e6","#c5221f","#0d7377","#e6
 const HOURS = [];
 for(let h=8;h<=20;h++){HOURS.push(('0'+h).slice(-2)+':00')}
 const SERVICES = SERVICES_JSON;
+const STAFF = STAFF_JSON;
+let WEEK_CURRENT = 'WEEK_PARAM';
 let filterService = '';
+let filterStaff = '';
 function parseLocal(s){var p=s.split('-');return new Date(+p[0],+p[1]-1,+p[2])}
 function getMon(d){d=parseLocal(d);var day=d.getDay();d.setDate(d.getDate()-(day===0?6:day-1));return d}
 function fmtDate(d){var m=d.getMonth()+1;return d.getFullYear()+'-'+('0'+m).slice(-2)+'-'+('0'+d.getDate()).slice(-2)}
 function fmtBr(d){return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)}
 function esc(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
 function render(weekStart){
+WEEK_CURRENT = weekStart;
 var mon=getMon(weekStart),weekDays=[];
 for(var i=0;i<7;i++){var d=new Date(mon);d.setDate(mon.getDate()+i);weekDays.push(d)}
 var today=fmtDate(new Date());
 var filterOpts='<option value="">Todos os servicos</option>';
 SERVICES.forEach(function(s){filterOpts+='<option value="'+esc(s.name)+'"'+(filterService===s.name?' selected':'')+'>'+esc(s.name)+'</option>'});
-var html='<div class="filtro"><label>Filtrar:</label><select id="svcFilter" onchange="filterService=this.value;render(WEEK_PARAM)">'+filterOpts+'</select></div>';
+var staffOpts='<option value="">Todos os funcionarios</option>';
+STAFF.forEach(function(s){staffOpts+='<option value="'+esc(s.name)+'"'+(filterStaff===s.name?' selected':'')+'>'+esc(s.name)+'</option>'});
+var html='<div class="filtro"><label>Servico:</label><select id="svcFilter" onchange="filterService=this.value;render(WEEK_CURRENT)">'+filterOpts+'</select><label>Funcionario:</label><select id="staffFilter" onchange="filterStaff=this.value;render(WEEK_CURRENT)">'+staffOpts+'</select></div>';
 html+='<div class="nav"><div class="btns"><a href="/dashboard"> Hoje</a></div><h2>'+fmtBr(weekDays[0])+' - '+fmtBr(weekDays[6])+'</h2><div class="btns">';
 var prev="PREV_WEEK";var next="NEXT_WEEK";
 html+='<a href="?week='+prev+'"> Anterior</a>';
@@ -769,10 +837,12 @@ for(var h=0;h<HOURS.length;h++){
 html+='<div class="tm">'+HOURS[h]+'</div>';
 for(var d=0;d<7;d++){var f=fmtDate(weekDays[d]);html+='<div class="sl'+(f===today?' today':'')+(h%2===1?' hl':'')+'" id="s-'+f+'-'+h+'"></div>'}
 }
+document.getElementById('cal').innerHTML=html;
 var slots={};
 APPOINTMENTS.forEach(function(a){
-if(a.status!=='scheduled')return;
-if(filterService && a.title!==filterService)return;
+  if(a.status!=='scheduled')return;
+  if(filterService && a.title!==filterService)return;
+  if(filterStaff && a.staff_name!==filterStaff)return;
 var s=new Date(a.start_time),e=new Date(a.end_time);
 var dayIdx=weekDays.findIndex(function(wd){return fmtDate(wd)===fmtDate(s)});
 if(dayIdx<0)return;
@@ -789,27 +859,28 @@ slots[sid].push({a:a,top:topPct,height:heightPx})
 for(var key in slots){
 var items=slots[key];
 items.sort(function(x,y){return x.a.start_time<y.a.start_time?-1:1});
-items.forEach(function(item,i){
-var el=document.getElementById('s-'+key);
-if(!el)return;
-var c=COLORS[item.a.id%COLORS.length];
-var n=item.a.description||'';
-var d=document.createElement('div');d.className='appt';
-d.style.cssText='background:'+c+';height:'+item.height+'px;top:'+item.top+'%';
-var startStr=item.a.start_time.slice(11,16);
-d.innerHTML='<div class="n">'+esc(item.a.title)+'</div>'+(n?'<div class="d">'+esc(n)+'</div>':'')+'<div class="d">'+startStr+'</div>';
-d.onclick=function(){showModal(item.a)};
-el.appendChild(d)
+items.forEach(function(item){
+  var el=document.getElementById('s-'+key);
+  if(!el)return;
+  var c=COLORS[item.a.id%COLORS.length];
+  var n=item.a.description||'';
+  var staffName=item.a.staff_name||'';
+  var d=document.createElement('div');d.className='appt';
+  d.style.cssText='background:'+c+';height:'+item.height+'px;top:'+item.top+'%';
+  var startStr=item.a.start_time.slice(11,16);
+  d.innerHTML='<div class="n">'+esc(item.a.title)+'</div>'+(staffName?'<div class="d">'+esc(staffName)+'</div>':'')+(n?'<div class="d">'+esc(n)+'</div>':'')+'<div class="d">'+startStr+'</div>';
+  d.onclick=function(){showModal(item.a)};
+  el.appendChild(d)
 })
 }
-document.getElementById('cal').innerHTML=html;
 }
 function showModal(a){
 var c=COLORS[a.id%COLORS.length];
 var h='<div class="mhead" style="background:'+c+'10;border-bottom:3px solid '+c+'"><h3>'+esc(a.title)+'</h3><button class="close-x" onclick="closeModal()">&times;</button></div>';
 h+='<div class="mbody">';
 if(a.description)h+='<div class="mrow"><span class="ico">👤</span><div class="val"><b>Cliente:</b> '+esc(a.description)+'</div></div>';
-h+='<div class="mrow"><span class="ico">📅</span><div class="val"><b>Inicio:</b> '+a.start_time.slice(0,16).replace('T',' ')+'</div></div>';
+  h+='<div class="mrow"><span class="ico">📅</span><div class="val"><b>Inicio:</b> '+a.start_time.slice(0,16).replace('T',' ')+'</div></div>';
+  if(a.staff_name)h+='<div class="mrow"><span class="ico">👤</span><div class="val"><b>Funcionario:</b> '+esc(a.staff_name)+'</div></div>';
 h+='<div class="mrow"><span class="ico">⏰</span><div class="val"><b>Fim:</b> '+a.end_time.slice(0,16).replace('T',' ')+'</div></div>';
 var dur=Math.round((new Date(a.end_time)-new Date(a.start_time))/60000);
 h+='<div class="mrow"><span class="ico">⏱️</span><div class="val"><b>Duracao:</b> '+dur+'min</div></div>';
@@ -854,6 +925,7 @@ render('WEEK_PARAM');
         .replace("APP_JSON", app_json)
         .replace("DAYS_JSON", json.dumps(DAYS))
         .replace("SERVICES_JSON", services_json)
+        .replace("STAFF_JSON", staff_json)
         .replace("WEEK_PARAM", week_param)
         .replace("PREV_WEEK", prev_week)
         .replace("NEXT_WEEK", next_week)
@@ -910,6 +982,17 @@ def config_page(request: Request):
         "consultório": "Consultório",
         "outro": "Outro",
     }.items())
+
+    staff_list = db.list_staff(barbershop_id, active_only=False)
+    staff_rows = "".join(
+        f"""<tr id="staff-{s['id']}"><td>{s['name']}</td>
+        <td><span class="badge {'b-connected' if s['active'] else 'b-inactive'}">{'ativo' if s['active'] else 'inativo'}</span></td>
+        <td>
+          <button class="btn-sm" onclick="editStaff({s['id']},'{s['name']}')">✏️</button>
+          <button class="btn-sm btn-danger" onclick="delStaff({s['id']})">🗑️</button>
+        </td></tr>"""
+        for s in staff_list
+    )
 
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -994,6 +1077,16 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
 </div>
 
 <div class="card">
+  <h2>👤 Funcionários</h2>
+  <div class="form-row" style="margin-bottom:8px">
+    <div class="field" style="flex:3"><label>Nome</label><input id="staffName" placeholder="Ex: Carlos"></div>
+    <div class="field" style="flex:0"><button class="btn btn-primary" onclick="createStaff()" id="staffBtn">Adicionar</button></div>
+  </div>
+  <input id="staffEditId" type="hidden" value="">
+  {"<table><thead><tr><th>Nome</th><th>Status</th><th></th></tr></thead><tbody>" + staff_rows + "</tbody></table>" if staff_list else '<p class="empty">Nenhum funcionário cadastrado.</p>'}
+</div>
+
+<div class="card">
   <h2>📱 WhatsApp</h2>
   <p>Status: <span class="badge b-{wa_status}">{wa_status}</span></p>
   {qr_block}
@@ -1061,6 +1154,37 @@ async function saveBizType() {{
   try {{
     await api('PUT', '/barbershop', {{business_type: val}});
     msg('Tipo de negócio salvo!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+
+async function createStaff() {{
+  const name = document.getElementById('staffName').value.trim();
+  const editId = document.getElementById('staffEditId').value;
+  if (!name) return msg('Informe o nome do funcionário', 'error');
+  try {{
+    if (editId) {{
+      await api('PUT', '/staff/' + editId, {{name}});
+      msg('Funcionário atualizado!', 'success');
+    }} else {{
+      await api('POST', '/staff', {{name}});
+      msg('Funcionário adicionado!', 'success');
+    }}
+    setTimeout(()=>location.reload(), 1000);
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+
+function editStaff(id, name) {{
+  document.getElementById('staffName').value = name;
+  document.getElementById('staffEditId').value = id;
+  document.getElementById('staffBtn').textContent = 'Salvar';
+}}
+
+async function delStaff(id) {{
+  if (!confirm('Excluir este funcionário?')) return;
+  try {{
+    await api('DELETE', '/staff/' + id);
+    document.getElementById('staff-'+id).remove();
+    msg('Funcionário excluído!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
 </script>
@@ -1179,6 +1303,14 @@ def admin_stats(_=Depends(require_admin)):
     return db.get_stats()
 
 
+@app.delete("/admin/barbershops/{barbershop_id}")
+def admin_delete_barbershop(barbershop_id: int, _=Depends(require_admin)):
+    ok = db.delete_barbershop(barbershop_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Barbershop not found")
+    return {"ok": True}
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_dashboard(request: Request):
     token = request.cookies.get("token")
@@ -1203,7 +1335,9 @@ def admin_dashboard(request: Request):
         f"<td>{'<span class=\"badge b-admin\">Admin</span>' if s['is_admin'] else '<span class=\"badge b-shop\">Loja</span>'}</td>"
         f"<td><span id=\"wa-status-{s['id']}\">…</span></td>"
         f"<td><button class=\"btn-sm\" onclick=\"generateQr({s['id']})\">📱 QR</button></td>"
-        f"<td>{s['created_at'][:10]}</td></tr>"
+        f"<td>{s['created_at'][:10]}</td>"
+        + (f"<td><button class=\"btn-sm btn-del\" onclick=\"delShop({s['id']},'{s['name'].replace(chr(39), chr(92)+chr(39))}')\">🗑️</button></td>" if not s['is_admin'] else "<td></td>")
+        + "</tr>"
         for s in shops
     )
 
@@ -1234,6 +1368,7 @@ table{{width:100%;border-collapse:collapse;font-size:13px}}
 th,td{{padding:8px 6px;text-align:left;border-bottom:1px solid #0f3460}}
 th{{color:#888;font-weight:600}}
 .btn-sm{{padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:#0f3460;color:#e0e0e0}}
+.btn-del{{background:#c5221f!important;color:#fff!important}}
 .badge{{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}}
 .b-admin{{background:#e94560;color:#fff}}
 .b-shop{{background:#0f3460;color:#aaa}}
@@ -1256,7 +1391,7 @@ th{{color:#888;font-weight:600}}
 </div>
 <div class="container">
 <div class="card"><h2>🏢 Empresas</h2>
-{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>WA Status</th><th></th><th>Criado</th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
+{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>WA Status</th><th></th><th>Criado</th><th></th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
 </div>
 <div class="card"><h2>📋 Todos Agendamentos</h2>
 {"<table><thead><tr><th>#</th><th>Empresa</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if apps else '<p style="color:#888">Nenhum agendamento</p>'}
@@ -1291,6 +1426,14 @@ async function checkStatus(id) {{
     await checkStatus(parseInt(id));
   }}
 }})();
+async function delShop(id, name) {{
+  if (!confirm('ATENCAO: Excluir ' + name + ' (#' + id + ') e TODOS os seus dados? Agendamentos, servicos, funcionarios — tudo sera perdido!')) return;
+  try {{
+    const r = await fetch('/admin/barbershops/' + id, {{method:'DELETE', headers:{{'Authorization':'Bearer '+TOKEN}}}});
+    if (!r.ok) throw new Error((await r.json()).detail || 'Erro');
+    location.reload();
+  }} catch(e) {{ alert(e.message); }}
+}}
 </script>
 </body></html>""")
 
