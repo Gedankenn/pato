@@ -17,21 +17,15 @@ AI-powered appointment scheduling with WhatsApp integration. Built with FastAPI,
 
 ## Screenshots
 
-> Save your screenshots in `screenshots/` with the filenames below, or update the paths to match your own images.
-
 ### Weekly Calendar (`/dashboard`)
 
-![Weekly Calendar](screenshots/dashboard.png)
+![Weekly Calendar](screenshots/agenda.png)
 
 Color-coded appointment blocks, staff & service filters, week navigation, and a modal with full appointment details (client, staff, duration, status). Tap any slot to create, tap any block to view or cancel.
 
 ### WhatsApp Chat
 
-<p align="center">
-  <img src="screenshots/whatsapp-1.png" width="32%" alt="WhatsApp booking">
-  <img src="screenshots/whatsapp-2.png" width="32%" alt="WhatsApp confirmation">
-  <img src="screenshots/whatsapp-3.png" width="32%" alt="WhatsApp reminder">
-</p>
+![WhatsApp Chat](screenshots/whatsap.png)
 
 Customers interact naturally via WhatsApp. The LLM asks for service, time, name, and preferred staff member — just like a real receptionist. Automatic reminders sent at 5 PM the day before.
 
@@ -43,21 +37,9 @@ Manage services (name, duration, price), staff members, business type, and Whats
 
 ### Reports (`/reports`)
 
-![Reports](screenshots/reports.png)
+![Reports](screenshots/relatorio.png)
 
 30-day statistics: appointments per day (bar chart), most popular services, and monthly revenue breakdown.
-
-### Admin Panel (`/admin`)
-
-![Admin Panel](screenshots/admin.png)
-
-Multi-tenant dashboard showing all registered barbershops with WhatsApp status, QR generation, and delete capability.
-
-### Login Page (`/login`)
-
-![Login](screenshots/login.png)
-
-Clean login and registration form. Demo account available at `/demo` for quick testing.
 
 ## Architecture
 
