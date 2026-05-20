@@ -14,10 +14,6 @@ def get_connection():
     return conn
 
 
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@patoagenda.com")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
-
-
 def init_db():
     with get_connection() as conn:
         conn.execute("""
@@ -103,17 +99,21 @@ def _migrate(conn):
 
 
 def _ensure_admin(conn):
+    email = os.environ.get("ADMIN_EMAIL")
+    password = os.environ.get("ADMIN_PASSWORD")
+    if not email or not password:
+        return  # no admin env vars set — skip admin creation
     existing = conn.execute(
-        "SELECT id FROM barbershops WHERE email = ?", (ADMIN_EMAIL,)
+        "SELECT id FROM barbershops WHERE email = ?", (email,)
     ).fetchone()
     if existing:
         conn.execute("UPDATE barbershops SET is_admin = 1 WHERE id = ?", (existing["id"],))
     else:
         now = datetime.utcnow().isoformat()
-        password_hash = _bcrypt.hashpw(ADMIN_PASSWORD.encode(), _bcrypt.gensalt()).decode()
+        password_hash = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
         conn.execute(
             "INSERT INTO barbershops (name, email, password_hash, is_admin, created_at) VALUES (?, ?, ?, 1, ?)",
-            ("Administrador", ADMIN_EMAIL, password_hash, now),
+            ("Administrador", email, password_hash, now),
         )
 
 

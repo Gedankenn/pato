@@ -161,8 +161,8 @@ WA_VOLUME = /path/on/server/wa-data
 | `LLM_MODEL` | `qwen2.5-coder:14b` | Model name to use |
 | `PATO_DB_PATH` | `pato.db` | Path to the SQLite database |
 | `WHATAPP_DATA_DIR` | `/wa-data` | WhatsApp session data directory |
-| `ADMIN_EMAIL` | `admin@patoagenda.com` | Default admin email (first run) |
-| `ADMIN_PASSWORD` | `admin123` | Default admin password (first run) |
+| `ADMIN_EMAIL` | *(none)* | Admin email — **required** to enable the admin panel |
+| `ADMIN_PASSWORD` | *(none)* | Admin password — **required** to enable the admin panel |
 
 ### pato-whatsapp
 
