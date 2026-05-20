@@ -559,6 +559,7 @@ def create_appointment(
         start_time=body.start_time,
         end_time=body.end_time,
         staff_id=staff_id,
+        customer_phone=body.customer_phone,
     )
     return db.get_appointment(barbershop_id, appt_id)
 
@@ -839,6 +840,7 @@ QR_BLOCK
 </div></div>
 <div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 <div class="modal-overlay" id="modal"><div class="modal" id="modalBody"></div></div>
+<div class="modal-overlay" id="modalCreate"><div class="modal" id="modalCreateBody"></div></div>
 <script>
 const APPOINTMENTS = APP_JSON;
 const DAYS = DAYS_JSON;
@@ -932,6 +934,55 @@ document.getElementById('modalBody').innerHTML=h;
 document.getElementById('modal').classList.add('show')
 }
 function closeModal(){document.getElementById('modal').classList.remove('show')}
+function closeCreateModal(){document.getElementById('modalCreate').classList.remove('show')}
+document.getElementById('modalCreate').onclick=function(e){if(e.target===this)closeCreateModal()};
+
+function openCreate(dateStr, hourIdx){
+  var svcOpts='<option value=\"\">Selecione...</option>';
+  SERVICES.forEach(function(s){svcOpts+='<option value=\"'+esc(s.name)+'\">'+esc(s.name)+'</option>'});
+  var staffOpts='<option value=\"\">Sem preferencia</option>';
+  STAFF.forEach(function(s){staffOpts+='<option value=\"'+s.id+'\">'+esc(s.name)+'</option>'});
+  var h=document.getElementById('modalCreateBody');
+  h.innerHTML='<div class=\"mhead\" style=\"background:#1a73e810;border-bottom:3px solid #1a73e8\"><h3>➕ Novo Agendamento</h3><button class=\"close-x\" onclick=\"closeCreateModal()\">&times;</button></div>'
+    +'<div class=\"mbody\">'
+    +'<div class=\"mrow\"><span class=\"ico\">💈</span><div class=\"val\"><select id=\"crSvc\" style=\"width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;font-size:14px\">'+svcOpts+'</select></div></div>'
+    +'<div class=\"mrow\"><span class=\"ico\">👤</span><div class=\"val\"><input id=\"crName\" placeholder=\"Nome do cliente\" style=\"width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;font-size:14px\"></div></div>'
+    +'<div class=\"mrow\"><span class=\"ico\">📅</span><div class=\"val\"><input type=\"date\" id=\"crDate\" value=\"'+dateStr+'\" style=\"width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;font-size:14px\"></div></div>'
+    +'<div class=\"mrow\"><span class=\"ico\">⏰</span><div class=\"val\"><input type=\"time\" id=\"crTime\" value=\"'+(HOURS[hourIdx]||'09:00')+'\" style=\"width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;font-size:14px\"></div></div>'
+    +'<div class=\"mrow\"><span class=\"ico\">👥</span><div class=\"val\"><select id=\"crStaff\" style=\"width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;font-size:14px\">'+staffOpts+'</select></div></div>'
+    +'<div class=\"mrow\"><span class=\"ico\">📱</span><div class=\"val\"><input id=\"crPhone\" placeholder=\"WhatsApp do cliente (opcional)\" style=\"width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;font-size:14px\"></div></div>'
+    +'</div><div class=\"mfoot\"><button class=\"ok\" onclick=\"submitCreate()\">Criar</button><button class=\"close\" onclick=\"closeCreateModal()\">Cancelar</button></div>';
+  document.getElementById('modalCreate').classList.add('show')
+}
+
+async function submitCreate(){
+  var svc=document.getElementById('crSvc').value;
+  var name=document.getElementById('crName').value.trim();
+  var date=document.getElementById('crDate').value;
+  var time=document.getElementById('crTime').value;
+  var staffId=document.getElementById('crStaff').value;
+  var phone=document.getElementById('crPhone').value.trim();
+  if(!svc||!name||!date||!time){alert('Preencha todos os campos');return}
+  var start=date+'T'+time;
+  try{
+    var body={title:svc,description:name,start_time:start,end_time:start,staff_id:staffId?parseInt(staffId):null,customer_phone:phone};
+    var res=await fetch('/appointments',{method:'POST',headers:{'Authorization':'Bearer '+localStorage.getItem('token'),'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(res.status===409){var d=await res.json();alert(d.detail||'Conflito de horario');return}
+    if(!res.ok){var e=await res.json();alert(e.detail||'Erro ao criar');return}
+    closeCreateModal();location.reload()
+  }catch(e){alert('Erro de conexao')}
+}
+
+// Click on empty slot → create appointment
+document.getElementById('cal').addEventListener('click',function(e){
+  var sl=e.target.closest('.sl');if(!sl)return;
+  if(sl.querySelector('.appt'))return; // has appointments, don't interfere
+  var id=sl.id.replace('s-','');
+  var parts=id.split('-');
+  var dateStr=parts.slice(0,3).join('-');
+  var hourIdx=parseInt(parts[3]||0);
+  openCreate(dateStr,hourIdx)
+});
 async function cancelAppt(id){
 if(!confirm('Cancelar este agendamento?'))return;
 try{

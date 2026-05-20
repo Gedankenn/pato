@@ -8,6 +8,7 @@ class AppointmentCreate(BaseModel):
     start_time: str
     end_time: str
     staff_id: Optional[int] = None
+    customer_phone: str = ""
 
 
 class AppointmentReschedule(BaseModel):
