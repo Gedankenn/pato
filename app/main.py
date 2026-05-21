@@ -1699,7 +1699,7 @@ async def wa_message_webhook(request: Request):
 
     thread_id = f"wa_{barbershop_id}_{wa_number}"
 
-    # Personal mode: scheduling window logic
+    # Personal mode: scheduling window + LLM classification
     shop = db.get_barbershop(barbershop_id)
     if shop and shop.get("whatsapp_mode") == "personal":
         import re as _re
@@ -1707,6 +1707,18 @@ async def wa_message_webhook(request: Request):
         in_window = _scheduling_window.get(thread_id, False)
         if not in_window:
             if _re.search(keywords, text, _re.IGNORECASE):
+                bt = shop.get("business_type", "barbearia")
+                bt_label = {"barbearia":"barbearia","salão":"salão de beleza","cabeleireiro":"cabeleireiro","manicure":"manicure","pedicure":"pedicure","massagista":"massagista","spa":"SPA","tatuador":"estúdio de tatuagem","esteticista":"clínica de estética","depilação":"estúdio de depilação","maquiador":"maquiador","personal":"personal trainer","fisioterapeuta":"clínica de fisioterapia","petshop":"petshop","nutricionista":"consultório de nutrição","psicólogo":"consultório de psicologia","podólogo":"consultório de podologia","consultório":"consultório","outro":"prestador de serviços"}.get(bt, "prestador de serviços")
+                try:
+                    _now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+                    classification = await call_llm([{
+                        "role": "system",
+                        "content": f"Você é um classificador de intenção. Hoje é {_now_str}. Avalie APENAS a mensagem abaixo: a pessoa quer agendar, marcar, consultar preço/horário, ou cancelar um serviço em um(a) {bt_label}? Responda APENAS 'sim' ou 'não'. Ignore conversas casuais que mencionem palavras similares fora de contexto."
+                    }, {"role": "user", "content": text}])
+                    if "sim" not in classification.lower():
+                        return {"reply": None, "barbershop_id": barbershop_id}
+                except Exception:
+                    pass  # if LLM fails, let it through cautiously
                 _scheduling_window[thread_id] = True  # open window
             else:
                 return {"reply": None, "barbershop_id": barbershop_id}  # silent ignore
