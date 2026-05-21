@@ -30,7 +30,7 @@ from app.schemas import (
 )
 from pydantic import BaseModel
 from app import database as db
-from app.llm import build_system_prompt
+from app.llm import build_system_prompt, BUSINESS_TYPES
 from app.auth import create_token, get_current_barbershop_id, get_barbershop_id_from_request, require_admin
 
 app = FastAPI(title="PatoAgenda AI — Agendamentos Inteligentes")
@@ -1708,7 +1708,7 @@ async def wa_message_webhook(request: Request):
         if not in_window:
             if _re.search(keywords, text, _re.IGNORECASE):
                 bt = shop.get("business_type", "barbearia")
-                bt_label = {"barbearia":"barbearia","salão":"salão de beleza","cabeleireiro":"cabeleireiro","manicure":"manicure","pedicure":"pedicure","massagista":"massagista","spa":"SPA","tatuador":"estúdio de tatuagem","esteticista":"clínica de estética","depilação":"estúdio de depilação","maquiador":"maquiador","personal":"personal trainer","fisioterapeuta":"clínica de fisioterapia","petshop":"petshop","nutricionista":"consultório de nutrição","psicólogo":"consultório de psicologia","podólogo":"consultório de podologia","consultório":"consultório","outro":"prestador de serviços"}.get(bt, "prestador de serviços")
+                bt_label = BUSINESS_TYPES.get(bt, "prestador de serviços")
                 try:
                     _now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
                     classification = await call_llm([{
