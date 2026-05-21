@@ -313,6 +313,7 @@ import threading
 _last_appointment: dict[str, int] = {}
 _last_lock = threading.Lock()
 _scheduling_window: dict[str, bool] = {}  # thread_id -> True when in active scheduling conversation
+_scheduling_cooldown: dict[str, float] = {}  # thread_id -> timestamp when window last closed
 
 
 def _load_json(path: str) -> dict:
@@ -1448,6 +1449,10 @@ def _build_paid_cell(shop: dict, today_str: str) -> str:
 def admin_dashboard(request: Request):
     token = request.cookies.get("token")
     if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if not token:
         return RedirectResponse(url="/login")
     try:
         from app.auth import SECRET, ALGO
@@ -1706,6 +1711,10 @@ async def wa_message_webhook(request: Request):
         keywords = r'agendar|marcar|hor[aá]rio|agendamento|consulta|sess[aã]o|corte|barba|servi[çc]o|pre[çc]o|valor|quanto|custa|dispon[íi]vel|vaga|confirmar|cancelar|reagendar|remarcar'
         in_window = _scheduling_window.get(thread_id, False)
         if not in_window:
+            # Check cooldown: don't reopen window within 5 minutes of closing
+            cooldown = _scheduling_cooldown.get(thread_id, 0)
+            if cooldown and (datetime.now().timestamp() - cooldown) < 300:
+                return {"reply": None, "barbershop_id": barbershop_id}
             if _re.search(keywords, text, _re.IGNORECASE):
                 bt = shop.get("business_type", "barbearia")
                 bt_label = BUSINESS_TYPES.get(bt, "prestador de serviços")
@@ -1778,7 +1787,8 @@ async def wa_message_webhook(request: Request):
         action_executed = True
 
         if created_id:
-            _scheduling_window.pop(thread_id, None)  # close personal mode window
+            _scheduling_window.pop(thread_id, None)
+            _scheduling_cooldown[thread_id] = datetime.now().timestamp()  # 5min cooldown
             with _last_lock:
                 _last_appointment[thread_id] = created_id
             a = db.get_appointment(barbershop_id, created_id)
