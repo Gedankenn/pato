@@ -1181,6 +1181,20 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
   {qr_block}
 </div>
 
+<div class="card">
+  <h2>🤖 Modo do WhatsApp</h2>
+  <p style="font-size:14px;color:#666;margin-bottom:8px">Controle como o bot responde às mensagens.</p>
+  <div class="form-row">
+    <div class="field" style="flex:3"><label>Modo</label>
+      <select id="waMode" onchange="saveWaMode()">
+        <option value="business" {'selected' if shop.get('whatsapp_mode') != 'personal' else ''}>🏢 Empresa — responder todas as mensagens</option>
+        <option value="personal" {'selected' if shop.get('whatsapp_mode') == 'personal' else ''}>👤 Pessoal — só responder mensagens de agendamento</option>
+      </select>
+    </div>
+  </div>
+  <p style="font-size:12px;color:#888;margin-top:6px">No modo Pessoal, o bot ignora conversas comuns e só responde quando detecta palavras como "agendar", "horário", "marcar", "preço", etc.</p>
+</div>
+
 </div>
 <div class="ftr">PatoAgenda AI v1.0 — <a href="mailto:fabiostella@gmail.com" style="color:#999;text-decoration:none">fabiostella@gmail.com</a></div>
 
@@ -1274,6 +1288,13 @@ async function delStaff(id) {{
     await api('DELETE', '/staff/' + id);
     document.getElementById('staff-'+id).remove();
     msg('Funcionário excluído!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+async function saveWaMode() {{
+  const mode = document.getElementById('waMode').value;
+  try {{
+    await api('PUT', '/barbershop', {{whatsapp_mode: mode}});
+    msg('Modo WhatsApp salvo!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
 </script>
@@ -1643,15 +1664,23 @@ def me(barbershop_id: int = Depends(get_current_barbershop_id)):
 class BarbershopUpdate(BaseModel):
     name: str | None = None
     business_type: str | None = None
+    whatsapp_mode: str | None = None
 
 
 @app.put("/barbershop")
 def update_barbershop(body: BarbershopUpdate, barbershop_id: int = Depends(get_current_barbershop_id)):
-    ok = db.update_barbershop(barbershop_id, name=body.name, business_type=body.business_type)
-    if not ok:
+    updated = False
+    if body.name or body.business_type:
+        if db.update_barbershop(barbershop_id, name=body.name, business_type=body.business_type):
+            updated = True
+    if body.whatsapp_mode is not None:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE barbershops SET whatsapp_mode = ? WHERE id = ?", (body.whatsapp_mode, barbershop_id))
+            updated = True
+    if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update")
     shop = db.get_barbershop(barbershop_id)
-    return {"id": shop["id"], "name": shop["name"], "business_type": shop.get("business_type", "barbearia")}
+    return {"id": shop["id"], "name": shop["name"], "business_type": shop.get("business_type", "barbearia"), "whatsapp_mode": shop.get("whatsapp_mode", "business")}
 
 
 # ── Webhook (WhatsApp Manager → Backend) ───────────────────────
@@ -1666,6 +1695,14 @@ async def wa_message_webhook(request: Request):
 
     if not barbershop_id or not text:
         return {"error": "missing fields"}
+
+    # Personal mode: only respond to scheduling-related messages
+    shop = db.get_barbershop(barbershop_id)
+    if shop and shop.get("whatsapp_mode") == "personal":
+        import re as _re
+        keywords = r'agendar|marcar|hor[aá]rio|agendamento|consulta|sess[aã]o|corte|barba|servi[çc]o|pre[çc]o|valor|quanto|custa|dispon[íi]vel|vaga|confirmar|cancelar|reagendar|remarcar'
+        if not _re.search(keywords, text, _re.IGNORECASE):
+            return {"reply": None, "barbershop_id": barbershop_id}  # silent ignore
 
     thread_id = f"wa_{barbershop_id}_{wa_number}"
 

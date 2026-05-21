@@ -101,6 +101,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE barbershops ADD COLUMN business_type TEXT NOT NULL DEFAULT 'barbearia'")
     if "paid_until" not in shop_cols:
         conn.execute("ALTER TABLE barbershops ADD COLUMN paid_until TEXT DEFAULT NULL")
+    if "whatsapp_mode" not in shop_cols:
+        conn.execute("ALTER TABLE barbershops ADD COLUMN whatsapp_mode TEXT NOT NULL DEFAULT 'business'")
 
 
 def _ensure_admin(conn):
