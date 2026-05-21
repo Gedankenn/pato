@@ -99,6 +99,8 @@ def _migrate(conn):
     shop_cols = [r["name"] for r in conn.execute("PRAGMA table_info(barbershops)").fetchall()]
     if "business_type" not in shop_cols:
         conn.execute("ALTER TABLE barbershops ADD COLUMN business_type TEXT NOT NULL DEFAULT 'barbearia'")
+    if "paid_until" not in shop_cols:
+        conn.execute("ALTER TABLE barbershops ADD COLUMN paid_until TEXT DEFAULT NULL")
 
 
 def _ensure_admin(conn):
@@ -179,6 +181,25 @@ def update_barbershop(barbershop_id: int, name: str | None = None, business_type
     with get_connection() as conn:
         cur = conn.execute(f"UPDATE barbershops SET {', '.join(parts)} WHERE id = ?", vals)
         return cur.rowcount > 0
+
+
+def toggle_payment(barbershop_id: int):
+    """Toggle paid status: if unpaid, mark paid for 30 days. If paid, mark unpaid."""
+    from datetime import datetime as dt, timedelta as td, timezone as tz
+    with get_connection() as conn:
+        row = conn.execute("SELECT paid_until FROM barbershops WHERE id = ?", (barbershop_id,)).fetchone()
+        if not row:
+            return False
+        paid = row["paid_until"]
+        now = dt.now(tz.utc).replace(tzinfo=None)
+        if paid and paid > now.strftime("%Y-%m-%d"):
+            # Currently paid → mark unpaid
+            conn.execute("UPDATE barbershops SET paid_until = NULL WHERE id = ?", (barbershop_id,))
+        else:
+            # Mark paid for 30 days
+            new_date = (now + td(days=30)).strftime("%Y-%m-%d")
+            conn.execute("UPDATE barbershops SET paid_until = ? WHERE id = ?", (new_date, barbershop_id,))
+        return True
 
 
 # ── Appointments (scoped by barbershop) ─────────────────────
@@ -287,7 +308,7 @@ def update_appointment(barbershop_id, appointment_id, title=None, description=No
 def list_all_barbershops():
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, name, email, whatsapp_number, is_admin, created_at FROM barbershops ORDER BY id"
+            "SELECT id, name, email, whatsapp_number, is_admin, business_type, paid_until, created_at FROM barbershops ORDER BY id"
         ).fetchall()
         return [dict(r) for r in rows]
 

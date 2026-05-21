@@ -1400,6 +1400,28 @@ def admin_delete_barbershop(barbershop_id: int, _=Depends(require_admin)):
     return {"ok": True}
 
 
+@app.post("/admin/barbershops/{barbershop_id}/toggle-payment")
+def admin_toggle_payment(barbershop_id: int, _=Depends(require_admin)):
+    ok = db.toggle_payment(barbershop_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Barbershop not found")
+    return {"ok": True}
+
+
+def _build_paid_cell(shop: dict, today_str: str) -> str:
+    paid = shop.get("paid_until")
+    is_paid = bool(paid and paid >= today_str)
+    color = "#4caf50" if is_paid else "#f44336"
+    label = f"✓ {paid}" if is_paid else "✗"
+    return (
+        f"<td><label class=\"toggle-switch\" id=\"paid-wrap-{shop['id']}\" style=\"cursor:pointer\">"
+        f"<input type=\"checkbox\" id=\"paid-{shop['id']}\" onchange=\"togglePayment({shop['id']})\" {'checked' if is_paid else ''}>"
+        f"<span class=\"slider\" style=\"background:{color}\"></span>"
+        f"<small id=\"paid-label-{shop['id']}\" style=\"margin-left:8px;font-size:11px;color:{color}\">{label}</small>"
+        f"</label></td>"
+    )
+
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_dashboard(request: Request):
     token = request.cookies.get("token")
@@ -1418,6 +1440,8 @@ def admin_dashboard(request: Request):
     apps = db.list_all_appointments()
     stats = db.get_stats()
 
+    from datetime import date as _date
+    _today_str = _date.today().isoformat()
     shop_rows = "".join(
         f"<tr><td>#{s['id']}</td><td>{s['name']}</td><td>{s['email']}</td>"
         f"<td>{s['whatsapp_number'] or '-'}</td>"
@@ -1426,6 +1450,7 @@ def admin_dashboard(request: Request):
         f"<td><button class=\"btn-sm\" onclick=\"generateQr({s['id']})\">📱 QR</button></td>"
         f"<td>{s['created_at'][:10]}</td>"
         + (f"<td><button class=\"btn-sm btn-del\" onclick=\"delShop({s['id']},'{s['name'].replace(chr(39), chr(92)+chr(39))}')\">🗑️</button></td>" if not s['is_admin'] else "<td></td>")
+        + _build_paid_cell(s, _today_str)
         + "</tr>"
         for s in shops
     )
@@ -1458,6 +1483,11 @@ th,td{{padding:8px 6px;text-align:left;border-bottom:1px solid #0f3460}}
 th{{color:#888;font-weight:600}}
 .btn-sm{{padding:4px 8px;border:none;border-radius:6px;cursor:pointer;font-size:12px;background:#0f3460;color:#e0e0e0}}
 .btn-del{{background:#c5221f!important;color:#fff!important}}
+.toggle-switch{{position:relative;display:inline-flex;align-items:center;gap:4px}}
+.toggle-switch input{{display:none}}
+.toggle-switch .slider{{width:36px;height:20px;border-radius:20px;display:inline-block;position:relative;transition:background .3s}}
+.toggle-switch .slider::after{{content:'';position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:2px;left:2px;transition:transform .3s}}
+.toggle-switch input:checked+.slider::after{{transform:translateX(16px)}}
 .badge{{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600}}
 .b-admin{{background:#e94560;color:#fff}}
 .b-shop{{background:#0f3460;color:#aaa}}
@@ -1480,7 +1510,7 @@ th{{color:#888;font-weight:600}}
 </div>
 <div class="container">
 <div class="card"><h2>🏢 Empresas</h2>
-{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>WA Status</th><th></th><th>Criado</th><th></th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
+{"<table><thead><tr><th>#</th><th>Nome</th><th>Email</th><th>WhatsApp</th><th>Tipo</th><th>WA Status</th><th></th><th>Criado</th><th></th><th>Pago</th></tr></thead><tbody>" + shop_rows + "</tbody></table>" if shops else '<p style="color:#888">Nenhuma empresa</p>'}
 </div>
 <div class="card"><h2>📋 Todos Agendamentos</h2>
 {"<table><thead><tr><th>#</th><th>Empresa</th><th>Serviço</th><th>Início</th><th>Fim</th><th>Status</th></tr></thead><tbody>" + app_rows + "</tbody></table>" if apps else '<p style="color:#888">Nenhum agendamento</p>'}
@@ -1522,6 +1552,15 @@ async function delShop(id, name) {{
     if (!r.ok) throw new Error((await r.json()).detail || 'Erro');
     location.reload();
   }} catch(e) {{ alert(e.message); }}
+}}
+async function togglePayment(id) {{
+  var cb = document.getElementById('paid-'+id);
+  var was = cb.checked; cb.checked = !was; // revert until confirmed
+  try {{
+    const r = await fetch('/admin/barbershops/' + id + '/toggle-payment', {{method:'POST', headers:{{'Authorization':'Bearer '+TOKEN}}}});
+    if (!r.ok) throw new Error('Erro');
+    location.reload();
+  }} catch(e) {{ alert(e.message); location.reload(); }}
 }}
 </script>
 </body></html>""")
