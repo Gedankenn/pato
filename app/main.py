@@ -312,6 +312,7 @@ def register(body: RegisterRequest):
 import threading
 _last_appointment: dict[str, int] = {}
 _last_lock = threading.Lock()
+_scheduling_window: dict[str, bool] = {}  # thread_id -> True when in active scheduling conversation
 
 
 def _load_json(path: str) -> dict:
@@ -1696,15 +1697,19 @@ async def wa_message_webhook(request: Request):
     if not barbershop_id or not text:
         return {"error": "missing fields"}
 
-    # Personal mode: only respond to scheduling-related messages
+    thread_id = f"wa_{barbershop_id}_{wa_number}"
+
+    # Personal mode: scheduling window logic
     shop = db.get_barbershop(barbershop_id)
     if shop and shop.get("whatsapp_mode") == "personal":
         import re as _re
         keywords = r'agendar|marcar|hor[aá]rio|agendamento|consulta|sess[aã]o|corte|barba|servi[çc]o|pre[çc]o|valor|quanto|custa|dispon[íi]vel|vaga|confirmar|cancelar|reagendar|remarcar'
-        if not _re.search(keywords, text, _re.IGNORECASE):
-            return {"reply": None, "barbershop_id": barbershop_id}  # silent ignore
-
-    thread_id = f"wa_{barbershop_id}_{wa_number}"
+        in_window = _scheduling_window.get(thread_id, False)
+        if not in_window:
+            if _re.search(keywords, text, _re.IGNORECASE):
+                _scheduling_window[thread_id] = True  # open window
+            else:
+                return {"reply": None, "barbershop_id": barbershop_id}  # silent ignore
 
     resolved = _resolve_dates(text)
     db.save_message(thread_id, "user", resolved)
@@ -1761,6 +1766,7 @@ async def wa_message_webhook(request: Request):
         action_executed = True
 
         if created_id:
+            _scheduling_window.pop(thread_id, None)  # close personal mode window
             with _last_lock:
                 _last_appointment[thread_id] = created_id
             a = db.get_appointment(barbershop_id, created_id)
