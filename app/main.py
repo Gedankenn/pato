@@ -675,7 +675,10 @@ def delete_staff(staff_id: int, barbershop_id: int = Depends(get_current_barbers
 # ── WhatsApp Status (scoped) ────────────────────────────────────
 
 @app.get("/whatsapp/qrcode")
-def get_qrcode(barbershop_id: int = Depends(get_current_barbershop_id)):
+def get_qrcode(request: Request):
+    barbershop_id = get_barbershop_id_from_request(request)
+    if not barbershop_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     qr_path = os.path.join(get_wa_status_dir(barbershop_id), "qrcode.png")
     if os.path.exists(qr_path):
         return FileResponse(qr_path, media_type="image/png")
