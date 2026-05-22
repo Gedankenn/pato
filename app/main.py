@@ -398,10 +398,12 @@ def _resolve_dates(text: str) -> str:
     return result
 
 
-def _build_prompt(barbershop_id: int, thread_id: str | None = None) -> str:
+def _build_prompt(barbershop_id: int, thread_id: str | None = None, customer_name: str = "") -> str:
     shop = db.get_barbershop(barbershop_id)
     biz_type = shop.get("business_type", "barbearia") if shop else "barbearia"
     base = build_system_prompt(biz_type)
+    if customer_name:
+        base += f"\n\nCliente atual: {customer_name}. Use este nome no campo description ao criar agendamentos."
     services = db.list_services(barbershop_id)
     if services:
         lines = "\n".join(
@@ -1701,6 +1703,7 @@ async def wa_message_webhook(request: Request):
     wa_number = body.get("from")
     text = body.get("text", "")
     barbershop_id = body.get("barbershop_id")
+    customer_name = body.get("customer_name", "")
 
     if not barbershop_id or not text:
         return {"error": "missing fields"}
@@ -1739,7 +1742,7 @@ async def wa_message_webhook(request: Request):
     db.save_message(thread_id, "user", resolved)
 
     prior = db.get_conversation(thread_id, limit=12)
-    prompt = _build_prompt(barbershop_id, thread_id)
+    prompt = _build_prompt(barbershop_id, thread_id, customer_name)
     history = [{"role": "system", "content": prompt}] + prior
 
     action_executed = False
