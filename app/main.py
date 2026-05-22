@@ -1004,7 +1004,7 @@ render('WEEK_PARAM');
     shop_name = shop['name']
     is_admin = bool(shop.get('is_admin'))
     qr_block2 = ""
-    if wa_status == "awaiting_scan":
+    if wa_status == "awaiting_scan" or os.path.exists(os.path.join(get_wa_status_dir(barbershop_id), "qrcode.png")):
         qr_block2 = """<div class="card"><h2> Conectar WhatsApp</h2><p>Escaneie o QR code com o WhatsApp da empresa:</p><p class="hint">WhatsApp > ... > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
 
     return HTMLResponse(
@@ -1037,7 +1037,7 @@ def config_page(request: Request):
     if os.path.exists(wa_status_path):
         wa_status = json.load(open(wa_status_path)).get("status", "inactive")
     qr_block = ""
-    if wa_status == "awaiting_scan":
+    if wa_status == "awaiting_scan" or os.path.exists(os.path.join(get_wa_status_dir(barbershop_id), "qrcode.png")):
         qr_block = f"""<div class="card"><h2>📱 Escaneie o QR Code</h2><p>Abra o WhatsApp no celular > ⋮ > Aparelhos conectados > Conectar</p><img class="qr" src="/whatsapp/qrcode" alt="QR Code"></div>"""
 
     svc_rows = "".join(
