@@ -404,6 +404,9 @@ def _build_prompt(barbershop_id: int, thread_id: str | None = None, customer_nam
     base = build_system_prompt(biz_type)
     if customer_name:
         base += f"\n\nCliente atual: {customer_name}. Use este nome no campo description ao criar agendamentos."
+    biz_info = shop.get("business_info", "") if shop else ""
+    if biz_info:
+        base += f"\n\nINFORMAÇÕES DO NEGÓCIO:\n{biz_info}\n\nUse estas informações para responder perguntas sobre horários, localização, políticas, etc. Se te perguntarem algo que não está aqui, diga educadamente que não sabe e que vai consultar os responsáveis."
     services = db.list_services(barbershop_id)
     if services:
         lines = "\n".join(
@@ -1194,6 +1197,13 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
 </div>
 
 <div class="card">
+  <h2>📝 Informações do Negócio</h2>
+  <p style="font-size:14px;color:#666;margin-bottom:8px">A IA usa estas informações para responder perguntas dos clientes. Inclua horários, endereço, políticas, etc.</p>
+  <textarea id="bizInfo" rows="6" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;font-family:inherit;resize:vertical" placeholder="Ex: Funcionamos de segunda a sábado das 9h às 19h. Ficamos na Rua X, 123. Aceitamos dinheiro, cartão e PIX. Estacionamento gratuito...">{shop.get('business_info', '')}</textarea>
+  <button class="btn btn-primary" onclick="saveBizInfo()" style="margin-top:8px">Salvar Informações</button>
+</div>
+
+<div class="card">
   <h2>👤 Funcionários</h2>
   <div class="form-row" style="margin-bottom:8px">
     <div class="field" style="flex:3"><label>Nome</label><input id="staffName" placeholder="Ex: Carlos"></div>
@@ -1285,6 +1295,13 @@ async function saveBizType() {{
   try {{
     await api('PUT', '/barbershop', {{business_type: val}});
     msg('Tipo de negócio salvo!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+async function saveBizInfo() {{
+  const val = document.getElementById('bizInfo').value;
+  try {{
+    await api('PUT', '/barbershop', {{business_info: val}});
+    msg('Informações salvas!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
 
@@ -1715,6 +1732,7 @@ class BarbershopUpdate(BaseModel):
     name: str | None = None
     business_type: str | None = None
     whatsapp_mode: str | None = None
+    business_info: str | None = None
 
 
 @app.put("/barbershop")
@@ -1727,10 +1745,14 @@ def update_barbershop(body: BarbershopUpdate, barbershop_id: int = Depends(get_c
         with db.get_connection() as conn:
             conn.execute("UPDATE barbershops SET whatsapp_mode = ? WHERE id = ?", (body.whatsapp_mode, barbershop_id))
             updated = True
+    if body.business_info is not None:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE barbershops SET business_info = ? WHERE id = ?", (body.business_info, barbershop_id))
+            updated = True
     if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update")
     shop = db.get_barbershop(barbershop_id)
-    return {"id": shop["id"], "name": shop["name"], "business_type": shop.get("business_type", "barbearia"), "whatsapp_mode": shop.get("whatsapp_mode", "business")}
+    return {"id": shop["id"], "name": shop["name"], "business_type": shop.get("business_type", "barbearia"), "whatsapp_mode": shop.get("whatsapp_mode", "business"), "business_info": shop.get("business_info", "")}
 
 
 # ── Webhook (WhatsApp Manager → Backend) ───────────────────────
