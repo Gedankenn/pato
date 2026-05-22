@@ -91,5 +91,6 @@ wa-stop:
 
 wa-start:
 	@read -p "Barbershop ID: " id; \
-	TOKEN=$$(ssh $(SERVER) "curl -s -X POST http://localhost:8000/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"fabioslikastella@gmail.com\",\"password\":\"8#L5hokgVNh@1SU7BNWL\"}' | grep -o '\"token\":\"[^\"]*\"' | cut -d'\"' -f4"); \
+	read -sp "Admin password: " pw; echo; \
+	TOKEN=$$(ssh $(SERVER) "curl -s -X POST http://localhost:8000/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"fabioslikastella@gmail.com\",\"password\":\"'$$pw'\"}' | grep -o '\"token\":\"[^\"]*\"' | cut -d'\"' -f4"); \
 	ssh $(SERVER) "curl -s -X POST -H 'Authorization: Bearer $$TOKEN' http://localhost:8000/admin/start-whatsapp/$$id"
