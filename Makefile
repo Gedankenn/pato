@@ -8,7 +8,7 @@ WA_VOLUME = /mnt/user/appdata/pato/wa-data
 SERVER = root@tower.local
 SERVER_DIR = /mnt/user/appdata/pato
 
-.PHONY: build restart deploy logs ssh sync sync-wa wa-build wa-logs
+.PHONY: build restart deploy logs ssh sync sync-wa wa-build wa-logs log log-wa log-all
 
 build:
 	docker build -t $(IMAGE) .
@@ -73,3 +73,23 @@ sync-wa:
 		--exclude='public' \
 		/home/sabinho/github/pato/whatsapp/ $(SERVER):$(SERVER_DIR)/whatsapp/
 	ssh $(SERVER) "cd $(SERVER_DIR)/whatsapp && docker build -t $(WA_IMAGE) . && docker rm -f $(WA_CONTAINER) 2>/dev/null && docker run -d --name $(WA_CONTAINER) --network host --restart unless-stopped -e MANAGER_PORT=8001 -e PATO_API_URL=http://localhost:8000 -e CHROMIUM_PATH=/usr/bin/chromium -v $(WA_VOLUME):/app/data $(WA_IMAGE)"
+
+# ── Remote log watching ──────────────────────────────────────
+log:
+	ssh $(SERVER) "docker logs -f --tail 50 $(CONTAINER)"
+
+log-wa:
+	ssh $(SERVER) "docker logs -f --tail 50 $(WA_CONTAINER)"
+
+log-all:
+	ssh $(SERVER) "docker logs -f --tail 20 $(CONTAINER) & docker logs -f --tail 20 $(WA_CONTAINER); wait"
+
+# ── WhatsApp session management ──────────────────────────────
+wa-stop:
+	@read -p "Barbershop ID: " id; \
+	ssh $(SERVER) "curl -s -X DELETE http://localhost:8001/manager/stop/$$id"
+
+wa-start:
+	@read -p "Barbershop ID: " id; \
+	TOKEN=$$(ssh $(SERVER) "curl -s -X POST http://localhost:8000/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"fabioslikastella@gmail.com\",\"password\":\"8#L5hokgVNh@1SU7BNWL\"}' | grep -o '\"token\":\"[^\"]*\"' | cut -d'\"' -f4"); \
+	ssh $(SERVER) "curl -s -X POST -H 'Authorization: Bearer $$TOKEN' http://localhost:8000/admin/start-whatsapp/$$id"
