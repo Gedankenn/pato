@@ -156,6 +156,7 @@ def execute_action(action: str, params: dict, barbershop_id: int, customer_phone
             if buffer > 0:
                 h, m = int(a["end_time"][11:13]), int(a["end_time"][14:16])
                 total = h * 60 + m + buffer
+                total = ((total + 4) // 5) * 5  # round up to nearest 5
                 bh, bm = divmod(total, 60)
                 buffered_end = f"{a['end_time'][:11]}{bh:02d}:{bm:02d}"
             if buffered_end > start and a["start_time"] < end:
