@@ -147,17 +147,24 @@ def execute_action(action: str, params: dict, barbershop_id: int, customer_phone
         if not description:
             return "description (nome do cliente) is required. Ask who the appointment is for.", None
 
-        # Double-booking check: same staff, overlapping time
+        # Double-booking check: same staff, overlapping time (with buffer)
         existing = db.list_appointments(barbershop_id, status="scheduled")
+        shop = db.get_barbershop(barbershop_id)
+        buffer = int((shop or {}).get("buffer_minutes", 0) or 0)
         for a in existing:
-            if a["start_time"] < end and start < a["end_time"]:
+            buffered_end = a["end_time"]
+            if buffer > 0:
+                h, m = int(a["end_time"][11:13]), int(a["end_time"][14:16])
+                total = h * 60 + m + buffer
+                bh, bm = divmod(total, 60)
+                buffered_end = f"{a['end_time'][:11]}{bh:02d}:{bm:02d}"
+            if buffered_end > start and a["start_time"] < end:
                 if staff_id and a.get("staff_id") == staff_id:
-                    return f"Horário já reservado para {a['staff_name'] or 'este funcionário'} nesse período ({a['start_time'][11:16]}-{a['end_time'][11:16]}). Escolha outro horário.", None
+                    return f"Horário já reservado para {a['staff_name'] or 'este funcionário'} nesse período ({a['start_time'][11:16]}-{a['end_time'][11:16]}).{' Intervalo de ' + str(buffer) + 'min após.' if buffer else ''} Escolha outro horário.", None
                 if not staff_id and not a.get("staff_id"):
-                    return f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]}). Escolha outro horário.", None
+                    return f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]}).{' Intervalo de ' + str(buffer) + 'min após.' if buffer else ''} Escolha outro horário.", None
 
         # Closing time validation
-        shop = db.get_barbershop(barbershop_id)
         closing = (shop or {}).get("closing_time", "")
         if closing and end > f"{start[:10]}T{closing}":
             return f"Horário inválido — {end[11:16]} passa do fechamento ({closing}). Escolha um horário até as {closing}.", None
@@ -417,6 +424,9 @@ def _build_prompt(barbershop_id: int, thread_id: str | None = None, customer_nam
     closing = shop.get("closing_time", "") if shop else ""
     if opening and closing:
         base += f"\n\nHORÁRIO DE FUNCIONAMENTO: {opening} às {closing}. NUNCA marque agendamentos que terminem DEPOIS das {closing}. Se o cliente pedir um horário que passe do fechamento, avise e sugira um horário mais cedo."
+    buffer = shop.get("buffer_minutes", 0) if shop else 0
+    if buffer > 0:
+        base += f"\n\nINTERVALO ENTRE AGENDAMENTOS: {buffer} minutos. Sempre considere {buffer} minutos de folga entre um agendamento e outro. Ao sugerir horários, calcule: fim do agendamento anterior + {buffer} min de intervalo."
     services = db.list_services(barbershop_id)
     if services:
         lines = "\n".join(
@@ -560,14 +570,22 @@ def create_appointment(
             import random
             staff_id = random.choice(active_staff)["id"]
 
-    # Double-booking check
+    # Double-booking check with buffer
+    shop = db.get_barbershop(barbershop_id)
     existing = db.list_appointments(barbershop_id, status="scheduled")
+    buffer = int((shop or {}).get("buffer_minutes", 0) or 0)
     for a in existing:
-        if a["start_time"] < body.end_time and body.start_time < a["end_time"]:
+        buffered_end = a["end_time"]
+        if buffer > 0:
+            h, m = int(a["end_time"][11:13]), int(a["end_time"][14:16])
+            total = h * 60 + m + buffer
+            bh, bm = divmod(total, 60)
+            buffered_end = f"{a['end_time'][:11]}{bh:02d}:{bm:02d}"
+        if buffered_end > body.start_time and a["start_time"] < body.end_time:
             if staff_id and a.get("staff_id") == staff_id:
-                raise HTTPException(status_code=409, detail=f"Horário já reservado para {a['staff_name'] or 'este funcionário'} ({a['start_time'][11:16]}-{a['end_time'][11:16]})")
+                raise HTTPException(status_code=409, detail=f"Horário já reservado para {a['staff_name'] or 'este funcionário'} ({a['start_time'][11:16]}-{a['end_time'][11:16]}).{' Intervalo de ' + str(buffer) + 'min após.' if buffer else ''}")
             if not staff_id and not a.get("staff_id"):
-                raise HTTPException(status_code=409, detail=f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]})")
+                raise HTTPException(status_code=409, detail=f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]}).{' Intervalo de ' + str(buffer) + 'min após.' if buffer else ''}")
 
     # Closing time validation
     shop = db.get_barbershop(barbershop_id)
@@ -1227,6 +1245,11 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
     <div class="field"><label>Fecha às</label><input type="time" id="closingTime" value="{shop.get('closing_time', '')}"></div>
     <div class="field" style="flex:0"><button class="btn btn-primary" onclick="saveHours()">Salvar</button></div>
   </div>
+  <div class="form-row" style="margin-top:10px">
+    <div class="field"><label>Intervalo entre agendamentos (min)</label><input type="number" id="bufferMin" value="{shop.get('buffer_minutes', 0)}" min="0" max="120"></div>
+    <div class="field" style="flex:0"><button class="btn btn-primary" onclick="saveBuffer()">Salvar</button></div>
+  </div>
+  <p style="font-size:12px;color:#888;margin-top:6px">Tempo de folga entre um agendamento e outro. Ex: 10 min para limpeza da sala entre consultas.</p>
 </div>
 
 <div class="card">
@@ -1336,6 +1359,13 @@ async function saveHours() {{
   try {{
     await api('PUT', '/barbershop', {{opening_time: open, closing_time: close}});
     msg('Horário salvo!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+async function saveBuffer() {{
+  const val = parseInt(document.getElementById('bufferMin').value) || 0;
+  try {{
+    await api('PUT', '/barbershop', {{buffer_minutes: val}});
+    msg('Intervalo salvo!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
 
@@ -1769,6 +1799,7 @@ class BarbershopUpdate(BaseModel):
     business_info: str | None = None
     opening_time: str | None = None
     closing_time: str | None = None
+    buffer_minutes: int | None = None
 
 
 @app.put("/barbershop")
@@ -1792,6 +1823,10 @@ def update_barbershop(body: BarbershopUpdate, barbershop_id: int = Depends(get_c
     if body.closing_time is not None:
         with db.get_connection() as conn:
             conn.execute("UPDATE barbershops SET closing_time = ? WHERE id = ?", (body.closing_time, barbershop_id))
+            updated = True
+    if body.buffer_minutes is not None:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE barbershops SET buffer_minutes = ? WHERE id = ?", (body.buffer_minutes, barbershop_id))
             updated = True
     if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update")

@@ -109,6 +109,8 @@ def _migrate(conn):
         conn.execute("ALTER TABLE barbershops ADD COLUMN opening_time TEXT NOT NULL DEFAULT ''")
     if "closing_time" not in shop_cols:
         conn.execute("ALTER TABLE barbershops ADD COLUMN closing_time TEXT NOT NULL DEFAULT ''")
+    if "buffer_minutes" not in shop_cols:
+        conn.execute("ALTER TABLE barbershops ADD COLUMN buffer_minutes INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_admin(conn):
