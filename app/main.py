@@ -1200,7 +1200,6 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
     </div>
   </div>
   <p style="font-size:12px;color:#888;margin-top:6px">No modo Pessoal, o bot ignora conversas comuns e só responde quando detecta palavras como "agendar", "horário", "marcar", "preço", etc.</p>
-  <p id=\"waModeWarning\" style=\"font-size:13px;margin-top:8px;padding:8px;border-radius:6px;display:none\"></p>
 </div>
 
 </div>
@@ -1302,26 +1301,9 @@ async function saveWaMode() {{
   const mode = document.getElementById('waMode').value;
   try {{
     await api('PUT', '/barbershop', {{whatsapp_mode: mode}});
-    updateModeWarning();
     msg('Modo WhatsApp salvo!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
-function updateModeWarning() {{
-  var m = document.getElementById('waMode').value;
-  var w = document.getElementById('waModeWarning');
-  if (m === 'personal') {{
-    w.style.display = 'block';
-    w.style.background = '#fff3e0';
-    w.style.color = '#e65100';
-    w.innerHTML = '⚠️ <b>Modo Pessoal ativo!</b> O bot só responderá mensagens com palavras de agendamento. Conversas comuns serão ignoradas.';
-  }} else {{
-    w.style.display = 'block';
-    w.style.background = '#e8f5e9';
-    w.style.color = '#2e7d32';
-    w.innerHTML = '✅ <b>Modo Empresa ativo.</b> O bot responderá todas as mensagens.';
-  }}
-}}
-updateModeWarning();
 </script>
 </body></html>""")
 
