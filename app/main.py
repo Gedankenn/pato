@@ -156,6 +156,12 @@ def execute_action(action: str, params: dict, barbershop_id: int, customer_phone
                 if not staff_id and not a.get("staff_id"):
                     return f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]}). Escolha outro horário.", None
 
+        # Closing time validation
+        shop = db.get_barbershop(barbershop_id)
+        closing = (shop or {}).get("closing_time", "")
+        if closing and end > f"{start[:10]}T{closing}":
+            return f"Horário inválido — {end[11:16]} passa do fechamento ({closing}). Escolha um horário até as {closing}.", None
+
         appt_id = db.create_appointment(
             barbershop_id=barbershop_id,
             title=title,
@@ -407,6 +413,10 @@ def _build_prompt(barbershop_id: int, thread_id: str | None = None, customer_nam
     biz_info = shop.get("business_info", "") if shop else ""
     if biz_info:
         base += f"\n\nINFORMAÇÕES DO NEGÓCIO:\n{biz_info}\n\nUse estas informações para responder perguntas sobre horários, localização, políticas, etc. Se te perguntarem algo que não está aqui, diga educadamente que não sabe e que vai consultar os responsáveis."
+    opening = shop.get("opening_time", "") if shop else ""
+    closing = shop.get("closing_time", "") if shop else ""
+    if opening and closing:
+        base += f"\n\nHORÁRIO DE FUNCIONAMENTO: {opening} às {closing}. NUNCA marque agendamentos que terminem DEPOIS das {closing}. Se o cliente pedir um horário que passe do fechamento, avise e sugira um horário mais cedo."
     services = db.list_services(barbershop_id)
     if services:
         lines = "\n".join(
@@ -558,6 +568,12 @@ def create_appointment(
                 raise HTTPException(status_code=409, detail=f"Horário já reservado para {a['staff_name'] or 'este funcionário'} ({a['start_time'][11:16]}-{a['end_time'][11:16]})")
             if not staff_id and not a.get("staff_id"):
                 raise HTTPException(status_code=409, detail=f"Horário já reservado ({a['start_time'][11:16]}-{a['end_time'][11:16]})")
+
+    # Closing time validation
+    shop = db.get_barbershop(barbershop_id)
+    closing = (shop or {}).get("closing_time", "")
+    if closing and body.end_time > f"{body.start_time[:10]}T{closing}":
+        raise HTTPException(status_code=400, detail=f"Horário inválido — {body.end_time[11:16]} passa do fechamento ({closing})")
 
     appt_id = db.create_appointment(
         barbershop_id=barbershop_id,
@@ -1204,6 +1220,16 @@ input,select{{padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px
 </div>
 
 <div class="card">
+  <h2>🕐 Horário de Funcionamento</h2>
+  <p style="font-size:14px;color:#666;margin-bottom:8px">A IA nunca vai agendar compromissos depois do horário de fechamento.</p>
+  <div class="form-row">
+    <div class="field"><label>Abre às</label><input type="time" id="openingTime" value="{shop.get('opening_time', '')}"></div>
+    <div class="field"><label>Fecha às</label><input type="time" id="closingTime" value="{shop.get('closing_time', '')}"></div>
+    <div class="field" style="flex:0"><button class="btn btn-primary" onclick="saveHours()">Salvar</button></div>
+  </div>
+</div>
+
+<div class="card">
   <h2>👤 Funcionários</h2>
   <div class="form-row" style="margin-bottom:8px">
     <div class="field" style="flex:3"><label>Nome</label><input id="staffName" placeholder="Ex: Carlos"></div>
@@ -1302,6 +1328,14 @@ async function saveBizInfo() {{
   try {{
     await api('PUT', '/barbershop', {{business_info: val}});
     msg('Informações salvas!', 'success');
+  }} catch(e) {{ msg(e.message, 'error'); }}
+}}
+async function saveHours() {{
+  const open = document.getElementById('openingTime').value;
+  const close = document.getElementById('closingTime').value;
+  try {{
+    await api('PUT', '/barbershop', {{opening_time: open, closing_time: close}});
+    msg('Horário salvo!', 'success');
   }} catch(e) {{ msg(e.message, 'error'); }}
 }}
 
@@ -1733,6 +1767,8 @@ class BarbershopUpdate(BaseModel):
     business_type: str | None = None
     whatsapp_mode: str | None = None
     business_info: str | None = None
+    opening_time: str | None = None
+    closing_time: str | None = None
 
 
 @app.put("/barbershop")
@@ -1748,6 +1784,14 @@ def update_barbershop(body: BarbershopUpdate, barbershop_id: int = Depends(get_c
     if body.business_info is not None:
         with db.get_connection() as conn:
             conn.execute("UPDATE barbershops SET business_info = ? WHERE id = ?", (body.business_info, barbershop_id))
+            updated = True
+    if body.opening_time is not None:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE barbershops SET opening_time = ? WHERE id = ?", (body.opening_time, barbershop_id))
+            updated = True
+    if body.closing_time is not None:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE barbershops SET closing_time = ? WHERE id = ?", (body.closing_time, barbershop_id))
             updated = True
     if not updated:
         raise HTTPException(status_code=400, detail="Nothing to update")
