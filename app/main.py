@@ -719,7 +719,28 @@ def admin_whatsapp_status(barbershop_id: int, _=Depends(require_admin)):
     return JSONResponse({"status": "inactive"})
 
 
-@app.get("/admin/whatsapp/qrcode/{barbershop_id}")
+@app.post("/admin/whatsapp/stop/{barbershop_id}")
+def admin_whatsapp_stop(barbershop_id: int, _=Depends(require_admin)):
+    """Para a sessão WhatsApp (para de gerar QR)"""
+    try:
+        resp = httpx.delete(f"{WHATSAPP_MANAGER_URL}/manager/stop/{barbershop_id}", timeout=10)
+        return resp.json()
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot reach WhatsApp manager: {e}")
+
+
+@app.post("/admin/whatsapp/logout/{barbershop_id}")
+def admin_whatsapp_logout(barbershop_id: int, _=Depends(require_admin)):
+    """Remove completamente o bot WhatsApp — para a sessão e apaga arquivos"""
+    import shutil
+    try:
+        httpx.delete(f"{WHATSAPP_MANAGER_URL}/manager/stop/{barbershop_id}", timeout=10)
+    except Exception:
+        pass
+    session_dir = get_wa_status_dir(barbershop_id)
+    if os.path.exists(session_dir):
+        shutil.rmtree(session_dir)
+    return {"ok": True}
 def admin_whatsapp_qrcode(barbershop_id: int, _=Depends(require_admin)):
     qr_path = os.path.join(get_wa_status_dir(barbershop_id), "qrcode.png")
     if os.path.exists(qr_path):
@@ -1479,7 +1500,9 @@ def admin_dashboard(request: Request):
         f"<td>{s['whatsapp_number'] or '-'}</td>"
         f"<td>{'<span class=\"badge b-admin\">Admin</span>' if s['is_admin'] else '<span class=\"badge b-shop\">Loja</span>'}</td>"
         f"<td><span id=\"wa-status-{s['id']}\">…</span></td>"
-        f"<td><button class=\"btn-sm\" onclick=\"generateQr({s['id']})\">📱 QR</button></td>"
+        f"<td><button class=\"btn-sm\" onclick=\"generateQr({s['id']})\">📱 QR</button> "
+        f"<button class=\"btn-sm\" onclick=\"stopWa({s['id']})\">🛑</button> "
+        f"<button class=\"btn-sm btn-del\" onclick=\"logoutWa({s['id']})\">🚫</button></td>"
         f"<td>{s['created_at'][:10]}</td>"
         + (f"<td><button class=\"btn-sm btn-del\" onclick=\"delShop({s['id']},'{s['name'].replace(chr(39), chr(92)+chr(39))}')\">🗑️</button></td>" if not s['is_admin'] else "<td></td>")
         + _build_paid_cell(s, _today_str)
@@ -1587,12 +1610,28 @@ async function delShop(id, name) {{
 }}
 async function togglePayment(id) {{
   var cb = document.getElementById('paid-'+id);
-  var was = cb.checked; cb.checked = !was; // revert until confirmed
+  var was = cb.checked; cb.checked = !was;
   try {{
     const r = await fetch('/admin/barbershops/' + id + '/toggle-payment', {{method:'POST', headers:{{'Authorization':'Bearer '+TOKEN}}}});
     if (!r.ok) throw new Error('Erro');
     location.reload();
   }} catch(e) {{ alert(e.message); location.reload(); }}
+}}
+async function stopWa(id) {{
+  if (!confirm('Parar a sessao WhatsApp desta loja?')) return;
+  try {{
+    const r = await fetch('/admin/whatsapp/stop/' + id, {{method:'POST', headers:{{'Authorization':'Bearer '+TOKEN}}}});
+    if (!r.ok) throw new Error((await r.json()).detail || 'Erro');
+    location.reload();
+  }} catch(e) {{ alert(e.message); }}
+}}
+async function logoutWa(id) {{
+  if (!confirm('ATENCAO: Remover o bot WhatsApp desta loja? A sessao sera desconectada e os arquivos apagados.')) return;
+  try {{
+    const r = await fetch('/admin/whatsapp/logout/' + id, {{method:'POST', headers:{{'Authorization':'Bearer '+TOKEN}}}});
+    if (!r.ok) throw new Error((await r.json()).detail || 'Erro');
+    location.reload();
+  }} catch(e) {{ alert(e.message); }}
 }}
 </script>
 </body></html>""")

@@ -64,11 +64,15 @@ async function startSession(barbershopId) {
   client.on("authenticated", () => {
     console.log(`[${barbershopId}] Authenticated`);
     writeStatus(barbershopId, { status: "authenticated" });
+    const qrPath = path.join(dir, "qrcode.png");
+    if (fs.existsSync(qrPath)) { fs.unlinkSync(qrPath); console.log(`[${barbershopId}] QR cleaned`); }
   });
 
   client.on("ready", () => {
     console.log(`[${barbershopId}] Ready`);
     writeStatus(barbershopId, { status: "connected" });
+    const qrPath = path.join(dir, "qrcode.png");
+    if (fs.existsSync(qrPath)) { fs.unlinkSync(qrPath); console.log(`[${barbershopId}] QR cleaned`); }
   });
 
   client.on("disconnected", (reason) => {
@@ -193,9 +197,12 @@ app.listen(PORT, () => {
       const statPath = path.join(DATA_DIR, dir, "status.json");
       if (fs.existsSync(statPath)) {
         const status = JSON.parse(fs.readFileSync(statPath, "utf-8"));
-        if (status.status === "connected" || status.status === "awaiting_scan" || status.status === "authenticated") {
+        if (status.status === "connected" || status.status === "authenticated") {
           console.log(`[${dir}] Auto-starting session...`);
           startSession(parseInt(dir));
+        } else if (status.status === "awaiting_scan") {
+          console.log(`[${dir}] Skipping stale awaiting_scan session`);
+          writeStatus(parseInt(dir), { status: "stopped" });
         }
       }
     }
