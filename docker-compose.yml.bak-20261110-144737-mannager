@@ -1,0 +1,29 @@
+services:
+  patinho:
+    build: .
+    container_name: patinho
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    mem_limit: 512m
+
+  backup:
+    image: alpine:3.20
+    container_name: patinho-backup
+    restart: unless-stopped
+    environment:
+      TZ: America/Sao_Paulo
+    command: >
+      sh -c "apk add --no-cache sqlite >/dev/null &&
+             while true; do
+               sqlite3 /data/patinho.db \".backup '/backup/patinho-$(date +%Y%m%d-%H%M).db'\" &&
+               gzip -f /backup/patinho-*.db || true;
+               find /backup -name 'patinho-*.db.gz' -mtime +14 -delete || true;
+               sleep 86400;
+             done"
+    volumes:
+      - ./data:/data:ro
+      - /home/server/backups/patinho:/backup

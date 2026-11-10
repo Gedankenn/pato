@@ -1,0 +1,20 @@
+Copyright (c) 2026 Fabio Slika Stella. Todos os direitos reservados.
+
+Este software e o produto Patinho são propriedade de Fabio Slika Stella, que declara
+autoria integral do código (histórico do repositório `Gedankenn/pato`: 50 commits, todos
+do mesmo autor) e, portanto, titular do direito de relicenciar.
+
+Uso permitido apenas mediante contrato de licença comercial firmado com o titular:
+- SaaS: direito de uso do serviço por loja contratante, sem direito de cópia do código.
+- On-premise: licença de instalação por estabelecimento, com EULA própria.
+
+É proibido, sem contrato escrito:
+1. copiar, distribuir, sublicenciar ou vender o software ou derivados;
+2. remover avisos de autoria;
+3. usar o código para treinar modelo de terceiro sem autorização do titular.
+
+O software é fornecido "como está", sem garantia de adequação a fim específico. O titular
+não responde por lucros cessantes, perda de dados ou indisponibilidade de terceiros
+(WhatsApp, provedor de modelo, hospedagem).
+
+Tratamento de dados pessoais: ver `PRIVACIDADE.md` e a página `/privacidade` do produto.
