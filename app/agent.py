@@ -80,7 +80,7 @@ def _exec_tool(tid, name, args):
         except Exception:
             return {"erro": "data inválida, use YYYY-MM-DD"}
         slots = core.free_slots(tid, day)
-        return {"data": args["data"], "livres": [time.strftime("%H:%M", time.localtime(s)) for s in slots[:8]]}
+        return {"data": args["data"], "livres": [time.strftime("%H:%M", time.localtime(s)) for s in slots[:24]]}
     if name == "agendar":
         svc = args.get("servico", "")
         try:
@@ -109,7 +109,7 @@ def llm_turn(tid, t, msgs):
     events = []
     usage = {"in": 0, "out": 0, "cost_usd": 0.0}
     with httpx.Client(timeout=TIMEOUT) as c:
-        for _ in range(3):
+        for _ in range(5):
             r = c.post(f"{BASE}/chat/completions", json=payload, headers=headers)
             if r.status_code >= 400:
                 raise RuntimeError(f"{r.status_code} {r.text[:120]}")
@@ -133,6 +133,15 @@ def llm_turn(tid, t, msgs):
                 events.append({"tool": fn, "args": args, "out": out})
                 payload["messages"].append({"role": "tool", "tool_call_id": call["id"],
                                             "content": json.dumps(out, ensure_ascii=False)})
+        # Se o modelo passou o limite só chamando ferramenta, força uma resposta em texto.
+        payload.pop("tools", None)
+        payload["messages"].append({"role": "user", "content": "Agora responda ao cliente em uma frase."})
+        r = c.post(f"{BASE.rstrip('/')}/chat/completions", json=payload, headers=headers)
+        if r.status_code < 400:
+            data = r.json()
+            usage["in"] += int((data.get("usage") or {}).get("prompt_tokens") or 0)
+            usage["out"] += int((data.get("usage") or {}).get("completion_tokens") or 0)
+            return (data["choices"][0]["message"].get("content") or "").strip(), events, usage
     return ("", events, usage)
 
 
