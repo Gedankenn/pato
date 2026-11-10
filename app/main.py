@@ -168,7 +168,7 @@ def sim_message(slug: str, body: SendIn):
                 "limit": st["limit"], "engine": "quota"}
     core.add_message(cid, "user", body.text)
     msgs = core.history(cid, 16)
-    reply, engine, meta = agent.turn(t["id"], t, msgs)
+    reply, engine, meta = agent.turn(t["id"], t, msgs, session=cid)
     core.add_message(cid, "assistant", reply)
     used = core.bump_usage(t["id"], meta["usage"]["in"], meta["usage"]["out"], meta["cost_micros"])
     return {"session": cid, "reply": reply, "engine": engine, "tools": meta["tools"],
