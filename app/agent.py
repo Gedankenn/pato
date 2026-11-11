@@ -24,6 +24,7 @@ HYBRID = os.environ.get("PATINHO_HYBRID", "1") not in ("0", "false", "no")
 COST_IN = float(os.environ.get("PATINHO_COST_IN", "0.15"))
 COST_OUT = float(os.environ.get("PATINHO_COST_OUT", "0.47"))
 UA = os.environ.get("PATINHO_LLM_UA", "patinho/1.0 (+OpenBot)")
+MAX_TOKENS = int(os.environ.get("PATINHO_MAX_TOKENS", "800"))
 
 SYSTEM = """Você é a recepcionista virtual de {name} ({niche}). Fala português do Brasil, no WhatsApp:
 mensagens curtas, tom humano, sem emoji exagerado, nunca diz que é IA.
@@ -36,6 +37,9 @@ Regras:
 - Se faltar informação, pergunte só o que falta.
 - Serviços disponíveis: {services}.
 - Hoje é {today}. Responder em no máximo 2 frases.
+- Se o bloco "Agendamentos desta conversa" existir, esses agendamentos SÃO REAIS: nunca diga
+  que não marcou, nem que "não deu certo". Se o cliente perguntar, confirme com esses dados.
+- Um horário da própria conversa não é "ocupado": já é do cliente.
 """
 
 TOOLS = [
@@ -49,6 +53,10 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "data": {"type": "string", "description": "YYYY-MM-DD"}},
             "required": ["data"]}}},
+    {"type": "function", "function": {
+        "name": "meus_agendamentos",
+        "description": "Agendamentos já marcados nesta conversa (para confirmar ao cliente).",
+        "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
         "name": "agendar",
         "description": "Cria o agendamento depois da confirmação do cliente.",
@@ -65,12 +73,27 @@ def _tools_for(tid):
     return ", ".join(f"{s['name']} ({s['minutes']} min)" for s in svcs) or "a combinar"
 
 
-def _system(tid, t):
-    return SYSTEM.format(name=t["name"], niche=t["niche"], services=_tools_for(tid),
+def _fmt_ts(ts):
+    return time.strftime("%d/%m às %H:%M", time.localtime(ts))
+
+
+def _system(tid, t, cid=None):
+    base = SYSTEM.format(name=t["name"], niche=t["niche"], services=_tools_for(tid),
                          today=time.strftime("%Y-%m-%d"))
+    rows = core.conversation_appointments(tid, cid) if cid else []
+    if rows:
+        linhas = "; ".join(f"#{r['id']} {r['service']} {_fmt_ts(r['start_ts'])} "
+                           f"({r['client_name']})" for r in rows)
+        base += ("\nAgendamentos desta conversa (já gravados no sistema, status agendado): "
+                 f"{linhas}.\n")
+    return base
 
 
-def _exec_tool(tid, name, args):
+def _exec_tool(tid, name, args, cid=None):
+    if name == "meus_agendamentos":
+        return {"agendamentos": [{"id": r["id"], "servico": r["service"],
+                                  "quando": _fmt_ts(r["start_ts"]), "cliente": r["client_name"]}
+                                 for r in core.conversation_appointments(tid, cid)]}
     if name == "listar_servicos":
         return [{"servico": s["name"], "minutos": s["minutes"], "preco": s["price_cents"] / 100}
                 for s in core.services(tid)]
@@ -79,7 +102,7 @@ def _exec_tool(tid, name, args):
             day = time.mktime(time.strptime(args["data"], "%Y-%m-%d"))
         except Exception:
             return {"erro": "data inválida, use YYYY-MM-DD"}
-        slots = core.free_slots(tid, day)
+        slots = core.free_slots(tid, day, ignore_conversation=cid)
         return {"data": args["data"], "livres": [time.strftime("%H:%M", time.localtime(s)) for s in slots[:24]]}
     if name == "agendar":
         svc = args.get("servico", "")
@@ -91,17 +114,28 @@ def _exec_tool(tid, name, args):
         match = next((s for s in core.services(tid) if s["name"].lower() == svc.lower()), None)
         minutes = match["minutes"] if match else 30
         aid = core.book(tid, match["name"] if match else svc, args.get("cliente", "Cliente"),
-                        start, start + minutes * 60)
+                        start, start + minutes * 60, conversation_id=cid)
         if not aid:
             return {"erro": "horário ocupado"}
-        return {"agendamento": aid, "quando": time.strftime("%d/%m %H:%M", time.localtime(start))}
+        return {"agendamento": aid, "servico": match["name"] if match else svc,
+                "cliente": args.get("cliente", "Cliente"),
+                "quando": time.strftime("%d/%m %H:%M", time.localtime(start)),
+                "ok": True}
     return {"erro": f"ferramenta desconhecida: {name}"}
 
 
-def llm_turn(tid, t, msgs):
-    """Returns (reply, events) or raises when the endpoint refuses."""
-    payload = {"model": MODEL, "messages": [{"role": "system", "content": _system(tid, t)}] + msgs,
-               "tools": TOOLS, "tool_choice": "auto", "temperature": 0.4, "max_tokens": 400}
+def _usage_acc(usage, data):
+    u = data.get("usage") or {}
+    usage["in"] += int(u.get("prompt_tokens") or 0)
+    usage["out"] += int(u.get("completion_tokens") or 0)
+    usage["cost_usd"] = usage.get("cost_usd", 0.0) + float((data.get("opencode") or {}).get("list_cost") or 0)
+
+
+def llm_turn(tid, t, msgs, cid=None):
+    """Returns (reply, events, usage) or raises when the endpoint refuses."""
+    # 400 estourava o JSON de ferramenta no meio; 800 cabe o turno inteiro.
+    payload = {"model": MODEL, "messages": [{"role": "system", "content": _system(tid, t, cid)}] + msgs,
+               "tools": TOOLS, "tool_choice": "auto", "temperature": 0.4, "max_tokens": MAX_TOKENS}
     # OpenCode Go exige sessao estavel por conversa e recusa UA de SDK/urllib.
     session = str(uuid.uuid5(uuid.NAMESPACE_URL, str(tid)))
     headers = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json",
@@ -114,22 +148,35 @@ def llm_turn(tid, t, msgs):
             if r.status_code >= 400:
                 raise RuntimeError(f"{r.status_code} {r.text[:120]}")
             data = r.json()
-            u = data.get("usage") or {}
-            usage["in"] += int(u.get("prompt_tokens") or 0)
-            usage["out"] += int(u.get("completion_tokens") or 0)
-            usage["cost_usd"] = usage.get("cost_usd", 0.0) + float((data.get("opencode") or {}).get("list_cost") or 0)
+            _usage_acc(usage, data)
             msg = data["choices"][0]["message"]
             payload["messages"].append(msg)
             calls = msg.get("tool_calls") or []
             if not calls:
-                return (msg.get("content") or "").strip(), events, usage
+                text = (msg.get("content") or "").strip()
+                if data["choices"][0].get("finish_reason") == "length":
+                    # resposta cortada no teto de tokens: refaz uma vez, com teto maior e pedindo curto
+                    payload["messages"].append({"role": "user", "content":
+                                                "Sua resposta anterior foi cortada. Responda de novo, "
+                                                "em no máximo duas frases curtas."})
+                    payload["max_tokens"] = max(MAX_TOKENS, 800)
+                    r2 = c.post(f"{BASE}/chat/completions", json=payload, headers=headers)
+                    payload["max_tokens"] = MAX_TOKENS
+                    if r2.status_code < 400:
+                        d2 = r2.json()
+                        _usage_acc(usage, d2)
+                        ch2 = d2["choices"][0]
+                        alt = (ch2["message"].get("content") or "").strip()
+                        if alt and ch2.get("finish_reason") != "length":
+                            return alt, events, usage
+                return text, events, usage
             for call in calls:
                 fn = call["function"]["name"]
                 try:
                     args = json.loads(call["function"].get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                out = _exec_tool(tid, fn, args)
+                out = _exec_tool(tid, fn, args, cid)
                 events.append({"tool": fn, "args": args, "out": out})
                 payload["messages"].append({"role": "tool", "tool_call_id": call["id"],
                                             "content": json.dumps(out, ensure_ascii=False)})
@@ -139,8 +186,7 @@ def llm_turn(tid, t, msgs):
         r = c.post(f"{BASE.rstrip('/')}/chat/completions", json=payload, headers=headers)
         if r.status_code < 400:
             data = r.json()
-            usage["in"] += int((data.get("usage") or {}).get("prompt_tokens") or 0)
-            usage["out"] += int((data.get("usage") or {}).get("completion_tokens") or 0)
+            _usage_acc(usage, data)
             return (data["choices"][0]["message"].get("content") or "").strip(), events, usage
     return ("", events, usage)
 
@@ -182,7 +228,7 @@ def _fmt(ts):
     return time.strftime("%d/%m às %H:%M", time.localtime(ts))
 
 
-def rule_turn(tid, t, msgs):
+def rule_turn(tid, t, msgs, cid=None):
     """Deterministic small-talk + booking. Good enough for a demo, honest about scope."""
     text = " ".join(m["content"] for m in msgs if m["role"] == "user")
     last = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
@@ -209,7 +255,7 @@ def rule_turn(tid, t, msgs):
         + hour[0] * 3600 + hour[1] * 60
     if not name:
         return (f"Fechado: {svc} {_fmt(start)}. Só me diz seu nome para eu reservar.", [])
-    aid = core.book(tid, svc, name, start, start + 1800)
+    aid = core.book(tid, svc, name, start, start + 1800, conversation_id=cid)
     if not aid:
         slots = core.free_slots(tid, start)
         alt = ", ".join(time.strftime("%H:%M", time.localtime(s)) for s in slots[:3])
@@ -229,23 +275,23 @@ def booking_intent(tid, text):
     return bool(has_svc and day and hour)
 
 
-def turn(tid, t, msgs):
+def turn(tid, t, msgs, cid=None):
     """LLM first; rule engine as the safety net. Returns (reply, engine, events)."""
     last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
     if KEY and HYBRID and booking_intent(tid, last_user):
-        reply, events = rule_turn(tid, t, msgs)
+        reply, events = rule_turn(tid, t, msgs, cid)
         return reply, "rule (agendamento exato)", {"tools": events, "usage": {"in": 0, "out": 0},
                                                    "cost_micros": 0}
     if KEY:
         try:
-            reply, events, usage = llm_turn(tid, t, msgs)
+            reply, events, usage = llm_turn(tid, t, msgs, cid)
             if reply:
                 cost = round(usage.get("cost_usd", 0) * 1_000_000) or \
                        round(usage["in"] * COST_IN + usage["out"] * COST_OUT)
                 return reply, f"llm:{MODEL}", {"tools": events, "usage": usage, "cost_micros": cost}
         except Exception as e:
-            reply, events = rule_turn(tid, t, msgs)
+            reply, events = rule_turn(tid, t, msgs, cid)
             return reply, f"rule (llm falhou: {str(e)[:60]})", {"tools": events, "usage": {"in": 0, "out": 0},
                                                                 "error": str(e)[:120], "cost_micros": 0}
-    reply, events = rule_turn(tid, t, msgs)
+    reply, events = rule_turn(tid, t, msgs, cid)
     return reply, "rule", {"tools": events, "usage": {"in": 0, "out": 0}, "cost_micros": 0}

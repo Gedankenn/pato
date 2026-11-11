@@ -94,3 +94,35 @@ def test_lgpd_delete_and_export():
     out = core.delete_subject(tid, cid[-6:])
     assert out["messages_deleted"] == 1
     assert core.history(cid) == []
+
+
+def test_own_booking_is_not_offered_as_busy():
+    """BUG-R1: depois de marcar, o proprio horario nao pode voltar como ocupado."""
+    tid = core.tenant_id("barbearia-demo")
+    day = time.mktime(time.strptime("2026-12-03", "%Y-%m-%d"))
+    cid = core.conversation(tid)
+    start = core.free_slots(tid, day)[0]
+    aid = core.book(tid, "Barba", "Ana", start, start + 1800, conversation_id=cid)
+    assert aid
+    # o proprio horario continua livre para a conversa que o marcou...
+    assert start in core.free_slots(tid, day, ignore_conversation=cid)
+    # ...e segue ocupado para qualquer outra conversa
+    assert start not in core.free_slots(tid, day, ignore_conversation="outra-conversa")
+    mine = core.conversation_appointments(tid, cid)
+    assert [a["id"] for a in mine] == [aid]
+    # o prompt passa a afirmar o agendamento, para o modelo nao negar o que marcou
+    prompt = agent._system(tid, core.tenant("barbearia-demo"), cid)
+    assert "Agendamentos desta conversa" in prompt and f"#{aid}" in prompt
+
+
+def test_rule_engine_records_conversation():
+    tid = core.tenant_id("barbearia-demo")
+    t = core.tenant("barbearia-demo")
+    cid = core.conversation(tid)
+    for text in ["quero barba amanhã às 10h", "meu nome é Ana"]:
+        core.add_message(cid, "user", text)
+        reply, engine, _ = agent.turn(tid, t, core.history(cid), cid)
+        core.add_message(cid, "assistant", reply)
+    assert engine == "rule"
+    mine = core.conversation_appointments(tid, cid)
+    assert len(mine) == 1 and mine[0]["client_name"] == "Ana"

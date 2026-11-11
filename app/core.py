@@ -43,9 +43,39 @@ create table if not exists appointments(
   end_ts integer not null,
   status text not null default 'scheduled',
   source text not null default 'demo',
+  conversation_id text,
   created_at integer not null
 );
 create index if not exists appt_tenant_start on appointments(tenant_id, start_ts);
+create table if not exists invites(
+  id integer primary key autoincrement,
+  token text unique not null,
+  tenant_id integer not null references tenants(id) on delete cascade,
+  email text not null,
+  created_at integer not null,
+  expires_at integer not null,
+  used_at integer
+);
+create table if not exists invoices(
+  id integer primary key autoincrement,
+  tenant_id integer not null references tenants(id) on delete cascade,
+  plan text not null,
+  amount_cents integer not null,
+  status text not null default 'open',
+  ref text not null default '',
+  created_at integer not null,
+  paid_at integer
+);
+create table if not exists users(
+  id integer primary key autoincrement,
+  email text unique not null,
+  tenant_id integer references tenants(id) on delete cascade,
+  role text not null default 'client',
+  salt text not null,
+  hash text not null,
+  active integer not null default 1,
+  created_at integer not null
+);
 create table if not exists conversations(
   id text primary key,
   tenant_id integer not null references tenants(id) on delete cascade,
@@ -85,6 +115,16 @@ def init():
         tcols = {r["name"] for r in con.execute("pragma table_info(tenants)")}
         if "retention_days" not in tcols:
             con.execute("alter table tenants add column retention_days integer not null default 180")
+        tcols2 = {r["name"] for r in con.execute("pragma table_info(tenants)")}
+        if "status" not in tcols2:
+            con.execute("alter table tenants add column status text not null default 'trial'")
+        if "trial_ends" not in tcols2:
+            con.execute("alter table tenants add column trial_ends integer")
+        con.execute("update tenants set trial_ends=created_at+14*86400 where trial_ends is null")
+        acols = {r["name"] for r in con.execute("pragma table_info(appointments)")}
+        if "conversation_id" not in acols:
+            con.execute("alter table appointments add column conversation_id text")
+        con.execute("create index if not exists appt_conv on appointments(conversation_id)")
         cols = {r["name"] for r in con.execute("pragma table_info(usage)")}
         for name, ddl in (("tokens_in", "integer not null default 0"),
                           ("tokens_out", "integer not null default 0"),
@@ -207,7 +247,7 @@ def usage(tid):
     return r["messages"] if r else 0
 
 
-def book(tid, service, client, start_ts, end_ts, source="demo"):
+def book(tid, service, client, start_ts, end_ts, source="demo", conversation_id=None):
     """Returns appointment id, or None when the slot is taken."""
     with connect() as con:
         clash = con.execute(
@@ -216,13 +256,30 @@ def book(tid, service, client, start_ts, end_ts, source="demo"):
         if clash:
             return None
         return con.execute(
-            "insert into appointments(tenant_id,service,client_name,start_ts,end_ts,source,created_at) "
-            "values(?,?,?,?,?,?,?)",
-            (tid, service, client, start_ts, end_ts, source, int(time.time()))).lastrowid
+            "insert into appointments(tenant_id,service,client_name,start_ts,end_ts,source,"
+            "conversation_id,created_at) values(?,?,?,?,?,?,?,?)",
+            (tid, service, client, start_ts, end_ts, source, conversation_id,
+             int(time.time()))).lastrowid
 
 
-def free_slots(tid, day_ts, service_minutes=30):
-    """Open 30-min-aligned starts for a given day, minus booked ranges."""
+def conversation_appointments(tid, cid, since=None):
+    """Agendamentos ativos criados por esta conversa: a verdade sobre "ja marquei"."""
+    if not cid:
+        return []
+    since = int(time.time()) - 86400 if since is None else since
+    with connect() as con:
+        return con.execute(
+            "select * from appointments where tenant_id=? and conversation_id=? "
+            "and status='scheduled' and end_ts>=? order by start_ts",
+            (tid, cid, since)).fetchall()
+
+
+def free_slots(tid, day_ts, service_minutes=30, ignore_conversation=None):
+    """Open 30-min-aligned starts for a given day, minus booked ranges.
+
+    ignore_conversation: nao contar os agendamentos da propria conversa como ocupados —
+    senao o cliente ouve "esse horario nao esta livre" logo depois de marcar nele.
+    """
     day = time.localtime(day_ts)
     wd = day.tm_wday
     hrs = hours(tid)
@@ -231,7 +288,8 @@ def free_slots(tid, day_ts, service_minutes=30):
     open_m, close_m = hrs[wd]
     midnight = int(time.mktime((day.tm_year, day.tm_mon, day.tm_mday, 0, 0, 0, 0, 0, -1)))
     booked = [(r["start_ts"], r["end_ts"]) for r in appointments(tid, since=midnight)
-              if r["status"] == "scheduled" and r["start_ts"] < midnight + 86400]
+              if r["status"] == "scheduled" and r["start_ts"] < midnight + 86400
+              and not (ignore_conversation and r["conversation_id"] == ignore_conversation)]
     slots = []
     t = midnight + open_m * 60
     end_day = midnight + close_m * 60
@@ -288,3 +346,135 @@ def delete_subject(tid, phone_marker):
         a = con.execute("update appointments set client_name='(removido)' where tenant_id=? and client_name=?",
                         (tid, phone_marker)).rowcount
     return {"messages_deleted": n, "appointments_anonymized": a}
+
+
+# ------------------------------------------------------------------ contas e lojas
+def slugify(name):
+    import re
+    import unicodedata
+    s = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode()
+    s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+    return s or "loja"
+
+
+def unique_slug(base):
+    with connect() as con:
+        slug, n = base, 1
+        while con.execute("select 1 from tenants where slug=?", (slug,)).fetchone():
+            n += 1
+            slug = f"{base}-{n}"
+    return slug
+
+
+def create_tenant(name, niche="", plan="trial", msg_limit=300, demo_limit=25, services=None):
+    """Cria a loja e devolve o id. services = [(nome, minutos, preco_cents), ...]."""
+    slug = unique_slug(slugify(name))
+    with connect() as con:
+        tid = con.execute(
+            "insert into tenants(slug,name,niche,plan,msg_limit,demo_limit,created_at) "
+            "values(?,?,?,?,?,?,?)", (slug, name.strip(), (niche or "").strip() or "servicos",
+                                      plan, msg_limit, demo_limit, int(time.time()))).lastrowid
+        con.execute("update tenants set trial_ends=? where id=?", (int(time.time()) + 14 * 86400, tid))
+        for sv, mins, price in (services or [("Atendimento", 30, 0)]):
+            con.execute("insert into services(tenant_id,name,minutes,price_cents) values(?,?,?,?)",
+                        (tid, sv, mins, price))
+        for wd in range(6):          # seg-sab 09:00-19:00
+            con.execute("insert into hours(tenant_id,weekday,open_min,close_min) values(?,?,?,?)",
+                        (tid, wd, 540, 1140))
+    return tid
+
+
+def set_tenant(tid, **fields):
+    allowed = {"name", "niche", "plan", "msg_limit", "demo_limit", "retention_days",
+               "active", "status", "trial_ends"}
+    sets = {k: v for k, v in fields.items() if k in allowed and v is not None}
+    if not sets:
+        return
+    q = "update tenants set " + ", ".join(f"{k}=?" for k in sets) + " where id=?"
+    with connect() as con:
+        con.execute(q, list(sets.values()) + [tid])
+
+
+def create_user(tenant_id, email, salt, hash_, role="client"):
+    with connect() as con:
+        return con.execute(
+            "insert into users(email,tenant_id,role,salt,hash,created_at) values(?,?,?,?,?,?)",
+            (email.strip().lower(), tenant_id, role, salt, hash_, int(time.time()))).lastrowid
+
+
+def user_by_email(email):
+    with connect() as con:
+        return con.execute("select * from users where email=?", ((email or "").strip().lower(),)).fetchone()
+
+
+def tenant_by_id(tid):
+    with connect() as con:
+        return con.execute("select * from tenants where id=?", (tid,)).fetchone()
+
+
+def invite_create(tid, email, token, days=7):
+    with connect() as con:
+        return con.execute(
+            "insert into invites(token,tenant_id,email,created_at,expires_at) values(?,?,?,?,?)",
+            (token, tid, email.strip().lower(), int(time.time()), int(time.time()) + days * 86400)).lastrowid
+
+
+def invite_by_token(token):
+    with connect() as con:
+        return con.execute("select * from invites where token=?", (token,)).fetchone()
+
+
+def invite_use(token):
+    with connect() as con:
+        con.execute("update invites set used_at=? where token=?", (int(time.time()), token))
+
+
+def invites_of(tid):
+    with connect() as con:
+        return con.execute("select * from invites where tenant_id=? order by id desc limit 20",
+                           (tid,)).fetchall()
+
+
+def invoice_create(tid, plan, amount_cents, ref=""):
+    with connect() as con:
+        return con.execute(
+            "insert into invoices(tenant_id,plan,amount_cents,status,ref,created_at) values(?,?,?,'open',?,?)",
+            (tid, plan, int(amount_cents), ref, int(time.time()))).lastrowid
+
+
+def invoices_of(tid):
+    with connect() as con:
+        return con.execute("select * from invoices where tenant_id=? order by id desc limit 20",
+                           (tid,)).fetchall()
+
+
+def invoice_by_id(iid):
+    with connect() as con:
+        return con.execute("select * from invoices where id=?", (iid,)).fetchone()
+
+
+def invoice_pay(iid, msg_limit=None):
+    """Marca paga e liga a assinatura da loja."""
+    inv = invoice_by_id(iid)
+    if not inv:
+        return None
+    with connect() as con:
+        con.execute("update invoices set status='paid', paid_at=? where id=?", (int(time.time()), iid))
+        con.execute("update tenants set plan=?, status='active', active=1, msg_limit=coalesce(?,msg_limit) "
+                    "where id=?", (inv["plan"], msg_limit, inv["tenant_id"]))
+    return inv
+
+
+def tenant_users(tid):
+    with connect() as con:
+        return con.execute("select * from users where tenant_id=? order by id", (tid,)).fetchall()
+
+
+def set_user_password(uid, salt, hash_):
+    with connect() as con:
+        con.execute("update users set salt=?, hash=? where id=?", (salt, hash_, uid))
+
+
+def set_user_active(uid, active):
+    with connect() as con:
+        con.execute("update users set active=? where id=?", (1 if active else 0, uid))
