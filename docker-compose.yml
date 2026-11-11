@@ -6,7 +6,7 @@ services:
     # host network fica invisível na LAN: o ufw do omaserver derruba 8090.
     # porta publicada passa pelo DNAT do docker e é alcançável em 192.168.5.245:8090
     ports:
-      - "192.168.5.245:8090:8090"
+      - "8090:8090"
     env_file:
       - .env
     volumes:
