@@ -3,3 +3,7 @@ data/
 __pycache__/
 .pytest_cache/
 *.pyc
+
+# backups de edição manual (compose/env/etc)
+*.bak-*
+*.bak[0-9]*
