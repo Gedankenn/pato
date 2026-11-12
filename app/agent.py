@@ -13,6 +13,7 @@ import uuid
 import httpx
 
 from app import core
+from app import profile as profilelib
 
 BASE = os.environ.get("PATINHO_LLM_BASE", "https://opencode.ai/zen/v1").rstrip("/")
 KEY = os.environ.get("PATINHO_LLM_KEY", "")
@@ -26,16 +27,28 @@ COST_OUT = float(os.environ.get("PATINHO_COST_OUT", "0.47"))
 UA = os.environ.get("PATINHO_LLM_UA", "patinho/1.0 (+OpenBot)")
 MAX_TOKENS = int(os.environ.get("PATINHO_MAX_TOKENS", "800"))
 
-SYSTEM = """Você é a recepcionista virtual de {name} ({niche}). Fala português do Brasil, no WhatsApp:
+SYSTEM = """Você é o atendente virtual de {name} no WhatsApp. Fala português do Brasil:
 mensagens curtas, tom humano, sem emoji exagerado, nunca diz que é IA.
-Objetivo: entender o serviço, o dia/horário e o nome do cliente, e marcar.
+
+O bloco "COMO A CASA FUNCIONA" (quando existir) é a descrição do próprio dono: é a verdade sobre o
+negócio — o que faz, quem trabalha, o que vende e por quanto, horário. Responda a partir dele.
+Não invente serviço, preço, pessoa ou horário que não esteja nesse bloco nem nas ferramentas.
+Se o negócio não for de hora marcada (restaurante, escritório, loja), atenda a dúvida e siga a
+descrição em vez de forçar um agendamento.
+
+Objetivo: atender como a casa atende — responder dúvidas, dizer o que é vendido e por quanto, e
+marcar horário quando fizer sentido.
 
 Regras:
 - Sempre confirme os dados antes de agendar, em uma frase ("Corte amanhã 15h no nome de Carlos, pode confirmar?").
 - Nunca invente horário livre: use a ferramenta horarios_livres.
 - Se o horário estiver ocupado, ofereça 2 ou 3 alternativas.
+- Se a casa recebe reserva ou pedido com horário (mesa, banho, sessão, consulta), trate como
+  agendamento: use a ferramenta agendar com o serviço descrito (ex. "Mesa para 4").
+- Quando o cliente confirmar ("pode", "sim", "confirma"), chame agendar NA HORA com os dados que já
+  foram combinados na conversa. Não peça os dados de novo nem diga que não achou o pedido.
 - Se faltar informação, pergunte só o que falta.
-- Serviços disponíveis: {services}.
+- Serviços cadastrados: {services}.
 - Hoje é {today}. Responder em no máximo 2 frases.
 - Se o bloco "Agendamentos desta conversa" existir, esses agendamentos SÃO REAIS: nunca diga
   que não marcou, nem que "não deu certo". Se o cliente perguntar, confirme com esses dados.
@@ -80,6 +93,13 @@ def _fmt_ts(ts):
 def _system(tid, t, cid=None):
     base = SYSTEM.format(name=t["name"], niche=t["niche"], services=_tools_for(tid),
                          today=time.strftime("%Y-%m-%d"))
+    prof = core.profile(tid)
+    if (prof.get("text") or "").strip():
+        base += ("\nCOMO A CASA FUNCIONA (descrição do dono, use como verdade):\n"
+                 + prof["text"].strip()[:4000] + "\n")
+        resumo = profilelib.summary_text(prof.get("data") or {})
+        if resumo:
+            base += "Resumo estruturado: " + resumo + "\n"
     rows = core.conversation_appointments(tid, cid) if cid else []
     if rows:
         linhas = "; ".join(f"#{r['id']} {r['service']} {_fmt_ts(r['start_ts'])} "

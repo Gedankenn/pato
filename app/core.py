@@ -1,4 +1,5 @@
 """Patinho — SQLite, quotas and appointment slots. Stdlib only, no ORM."""
+import json
 import os
 import sqlite3
 import time
@@ -17,6 +18,8 @@ create table if not exists tenants(
   demo_limit integer not null default 25,
   retention_days integer not null default 180,
   tz text not null default 'America/Sao_Paulo',
+  profile text not null default '',
+  profile_json text not null default '{}',
   created_at integer not null,
   active integer not null default 1
 );
@@ -118,6 +121,10 @@ def init():
         tcols2 = {r["name"] for r in con.execute("pragma table_info(tenants)")}
         if "status" not in tcols2:
             con.execute("alter table tenants add column status text not null default 'trial'")
+        for col, ddl in (("profile", "text not null default ''"),
+                         ("profile_json", "text not null default '{}'")):
+            if col not in tcols2:
+                con.execute(f"alter table tenants add column {col} {ddl}")
         if "trial_ends" not in tcols2:
             con.execute("alter table tenants add column trial_ends integer")
         con.execute("update tenants set trial_ends=created_at+14*86400 where trial_ends is null")
@@ -382,6 +389,35 @@ def create_tenant(name, niche="", plan="trial", msg_limit=300, demo_limit=25, se
             con.execute("insert into hours(tenant_id,weekday,open_min,close_min) values(?,?,?,?)",
                         (tid, wd, 540, 1140))
     return tid
+
+
+def profile(tid):
+    with connect() as con:
+        r = con.execute("select profile, profile_json from tenants where id=?", (tid,)).fetchone()
+    if not r:
+        return {"text": "", "data": {}}
+    try:
+        data = json.loads(r["profile_json"] or "{}")
+    except Exception:
+        data = {}
+    return {"text": r["profile"] or "", "data": data}
+
+
+def set_profile(tid, text, data):
+    """Grava o texto e aplica o que foi entendido: serviços e horário."""
+    with connect() as con:
+        con.execute("update tenants set profile=?, profile_json=? where id=?",
+                    (text, json.dumps(data, ensure_ascii=False), tid))
+        if data.get("services"):
+            con.execute("delete from services where tenant_id=?", (tid,))
+            for s in data["services"]:
+                con.execute("insert into services(tenant_id,name,minutes,price_cents) values(?,?,?,?)",
+                            (tid, s["name"], s["minutes"], s["price_cents"]))
+        if data.get("hours"):
+            con.execute("delete from hours where tenant_id=?", (tid,))
+            for h in data["hours"]:
+                con.execute("insert or replace into hours(tenant_id,weekday,open_min,close_min) "
+                            "values(?,?,?,?)", (tid, h["weekday"], h["open_min"], h["close_min"]))
 
 
 def set_tenant(tid, **fields):

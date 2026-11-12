@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import agent, core
+from app import agent, core, profile as profilelib
 
 app = FastAPI(title="Patinho", docs_url="/api/docs")
 core.init()
@@ -290,6 +290,11 @@ def page(title, user, body, extra_head=""):
             f'<footer>Patinho · painel</footer></html>')
 
 
+def html_page(*a, **k):
+    """page() devolve str; em rota POST isso vira text/plain — embrulha em HTMLResponse."""
+    return HTMLResponse(page(*a, **k))
+
+
 LOGIN_HTML = """<!doctype html><html lang="pt-BR"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Entrar — Patinho</title>
@@ -500,7 +505,7 @@ async def admin_create(request: Request):
             f'<p>login: <b>{email}</b><br>senha: <b>{pw}</b></p>'
             f'<p class="small warn">Copie a senha agora — ela não é mostrada de novo. Dá para gerar outra na página da loja.</p>'
             f'<p><a href="/admin/t/{t["slug"]}">abrir a loja</a> · <a href="/admin">voltar ao painel</a></p></div>')
-    return page("Conta criada", u, body)
+    return html_page("Conta criada", u, body)
 
 
 @app.get("/admin/t/{slug}", response_class=HTMLResponse)
@@ -637,7 +642,7 @@ async def admin_new_user(slug: str, request: Request):
     body = (f'<h2>Acesso criado</h2><div class="box"><p>login: <b>{email}</b><br>senha: <b>{pw}</b></p>'
             f'<p class="small warn">Copie agora — não é mostrada de novo.</p>'
             f'<p><a href="/admin/t/{slug}">voltar para a loja</a></p></div>')
-    return page("Acesso criado", u, body)
+    return html_page("Acesso criado", u, body)
 
 
 @app.post("/admin/t/{slug}/senha")
@@ -658,7 +663,7 @@ async def admin_reset(slug: str, request: Request):
     body = (f'<h2>Nova senha</h2><div class="box"><p>senha: <b>{pw}</b></p>'
             f'<p class="small warn">Copie agora — não é mostrada de novo.</p>'
             f'<p><a href="/admin/t/{slug}">voltar para a loja</a></p></div>')
-    return page("Nova senha", u, body)
+    return html_page("Nova senha", u, body)
 
 
 # ---------------------------------------------------------------- painel do cliente
@@ -707,6 +712,9 @@ def client_home(request: Request):
         f'<h2>Testar o atendimento</h2><div class="box"><p class="small">O simulador mostra como o cliente '
         f'conversa com o bot. É a mesma demonstração pública, sem os seus dados.</p>'
         f'<p><a href="{DEMO_BASE}/sim/{DEMO_SLUG}" target="_blank" rel="noopener">abrir simulador →</a></p></div>'
+        f'<h2>Como a sua casa funciona</h2><div class="box"><p class="small">O atendente aprende '
+        f'com um texto seu: o que você faz, quem trabalha, o que vende e por quanto.</p>'
+        f'<p><a href="/app/perfil">escrever / atualizar o perfil →</a></p></div>'
         f'<h2>Senha</h2><div class="box"><form class="inline" method="post" action="/app/senha">'
         f'<div><label>senha atual</label><input name="atual" type="password" required></div>'
         f'<div><label>nova senha (8+)</label><input name="nova" type="password" required minlength="8"></div>'
@@ -765,6 +773,66 @@ def client_login(request: Request):
     if u:
         return RedirectResponse("/admin" if u["role"] == "admin" else "/app", status_code=303)
     return login_page("/app")
+
+
+@app.get("/app/perfil", response_class=HTMLResponse)
+def client_profile_form(request: Request):
+    u, redir = _need_client(request)
+    if redir:
+        return redir
+    t = core.tenant_by_id(u["tenant_id"])
+    prof = core.profile(t["id"])
+    resumo = profilelib.summary_text(prof.get("data") or {})
+    exemplo = ("Somos a Barbearia do Zé, no centro. Corte R$ 40 (30 min), Barba R$ 25 (20 min), "
+               "Corte + barba R$ 60. Atendemos de segunda a sábado, das 9h às 19h. "
+               "Quem trabalha: Zé (barbeiro), Ana (barbeira). Não trabalhamos com química.")
+    body = (f'<h2>Como a sua casa funciona</h2>'
+            f'<div class="box"><p class="small">Escreva em um bloco só: o que você faz, quem trabalha '
+            f'com você e como, o que vende e por quanto, e o horário. É daqui que o atendente aprende. '
+            f'Pode escrever como fala — ele lê texto livre.</p>'
+            f'<form method="post" action="/app/perfil">'
+            f'<textarea name="texto" rows="12" required style="width:100%;background:#0a121a;color:#e6f0fa;'
+            f'border:1px solid #1e2834;border-radius:6px;font:13px/1.5 ui-monospace;padding:10px" '
+            f'placeholder="{exemplo}">{prof.get("text") or ""}</textarea>'
+            f'<div class="row" style="margin-top:10px"><button type="submit">Analisar e salvar</button>'
+            f'<span class="small">A análise usa o modelo; sem ele, um leitor simples de preço/horário.</span></div>'
+            f'</form></div>'
+            + (f'<h2>O que está valendo hoje</h2><div class="box"><div class="small">{resumo}</div></div>'
+               if resumo else '')
+            + '<p class="small"><a href="/app">← voltar ao painel</a></p>')
+    return page("Como funciona", u, body)
+
+
+@app.post("/app/perfil")
+async def client_profile_save(request: Request):
+    u, redir = _need_client(request)
+    if redir:
+        return redir
+    form = parse_qs((await request.body()).decode("utf-8", "replace"))
+    texto = ((form.get("texto") or [""])[0] or "").strip()[:6000]
+    t = core.tenant_by_id(u["tenant_id"])
+    if len(texto) < 20:
+        return RedirectResponse("/app/perfil", status_code=303)
+    data = profilelib.compile_profile(texto, t["name"], t["niche"])
+    core.set_profile(t["id"], texto, data)
+    serv = "".join(f'<tr><td>{s["name"]}</td><td>{s["minutes"]} min</td>'
+                   f'<td>{"R$ %.2f" % (s["price_cents"] / 100) if s["price_cents"] else "—"}</td></tr>'
+                   for s in data["services"]) or '<tr><td colspan="3" class="muted">nenhum serviço reconhecido</td></tr>'
+    dias = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
+    hor = ", ".join(f'{dias[h["weekday"]]} {h["open_min"] // 60:02d}:{h["open_min"] % 60:02d}-'
+                    f'{h["close_min"] // 60:02d}:{h["close_min"] % 60:02d}' for h in data["hours"])
+    equipe = ", ".join(p["name"] + (f' ({p["role"]})' if p["role"] else "") for p in data["staff"]) or "—"
+    body = (f'<h2>Entendi assim</h2>'
+            f'<div class="box"><div class="row"><b>{t["name"]}</b>'
+            f'<span class="pill">{data["vertical"]}</span></div>'
+            f'<div class="small">tom: {data["tone"] or "—"}'
+            + (f' · {data["notes"]}' if data["notes"] else "") + '</div></div>'
+            f'<h2>Serviços e preços</h2><table><tr><th>serviço</th><th>duração</th><th>preço</th></tr>{serv}</table>'
+            f'<h2>Horário</h2><div class="box">{hor}</div>'
+            f'<h2>Equipe</h2><div class="box">{equipe}</div>'
+            f'<p class="small">Se algo saiu errado, volta e ajusta o texto — o atendente usa exatamente isso.</p>'
+            f'<p><a href="/app/perfil">← editar</a> · <a href="/app">painel</a></p>')
+    return html_page("Perfil salvo", u, body)
 
 
 @app.get("/app/assinatura", response_class=HTMLResponse)
@@ -933,7 +1001,7 @@ async def admin_invite(slug: str, request: Request):
             f'border:1px solid #1e2834;border-radius:6px;font:11px/1.4 ui-monospace;padding:8px">{link}</textarea></p>'
             f'<p class="small">O cliente define a senha e cai direto no painel dele. Vale 7 dias.</p>'
             f'<p><a href="/admin/t/{slug}">voltar para a loja</a></p></div>')
-    return page("Convite", u, body)
+    return html_page("Convite", u, body)
 
 
 @app.get("/convite/{token}", response_class=HTMLResponse)
